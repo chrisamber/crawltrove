@@ -26,6 +26,7 @@ def main(command=None) -> None:
                     user.pw_gid,
                     follow_symlinks=False,
                 )
+        os.environ["HOME"] = user.pw_dir
         os.initgroups(user.pw_name, user.pw_gid)
         os.setgid(user.pw_gid)
         os.setuid(user.pw_uid)
