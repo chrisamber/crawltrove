@@ -13,6 +13,7 @@ import os
 import sys
 import base64
 import secrets
+from pathlib import Path
 
 from app import corpus_browser, dedup, embeddings, extract_llm, llmstxt, log, normalize, research, retrieval, search, sitemap, storage, scheduler, runner, vecindex
 from app.services import scraper, crawler, researcher, batcher
@@ -22,7 +23,7 @@ from app.url_safety import UnsafeUrlError
 
 logger = logging.getLogger("main")
 
-VERSION = "1.5.0"
+VERSION = Path(__file__).with_name("VERSION").read_text(encoding="utf-8").strip()
 
 
 class ArtifactStaticFiles(StaticFiles):
