@@ -3,6 +3,7 @@
 Backup scripts are shell and verified out-of-band (bash -n + a smoke run), not here.
 """
 import logging
+from pathlib import Path
 
 import httpx
 
@@ -13,6 +14,21 @@ def _client():
     from app.main import app
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                              base_url="http://test")
+
+
+async def test_public_version_comes_from_release_file():
+    from app.main import VERSION, app
+    release_version = (
+        Path(__file__).resolve().parents[1] / "app" / "VERSION"
+    ).read_text(encoding="utf-8").strip()
+
+    async with _client() as c:
+        health = await c.get("/api/health")
+        openapi = await c.get("/openapi.json")
+
+    assert VERSION == release_version
+    assert health.json()["version"] == release_version
+    assert openapi.json()["info"]["version"] == release_version
 
 
 # --- /api/health db state (always 200, auth-exempt) --------------------------
