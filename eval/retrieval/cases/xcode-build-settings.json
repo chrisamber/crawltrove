@@ -1,0 +1,10 @@
+{
+  "name": "xcode-build-settings-exact",
+  "query": "Xcode build settings reference",
+  "relevantIds": [
+    "corpus:url:https://developer.apple.com/documentation/xcode/build-settings-reference"
+  ],
+  "tags": ["apple", "xcode", "exact-symbol"],
+  "filters": {"kind": "corpus", "namespace": "xcode-tooling"},
+  "notes": "Xcode reference URL originates in checked-in namespace tests."
+}

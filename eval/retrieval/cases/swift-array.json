@@ -1,0 +1,10 @@
+{
+  "name": "swift-array-exact",
+  "query": "Swift Array append elements",
+  "relevantIds": [
+    "corpus:url:https://developer.apple.com/documentation/swift/array"
+  ],
+  "tags": ["swift", "standard-library", "exact-symbol"],
+  "filters": {"kind": "corpus", "namespace": "swift-stdlib"},
+  "notes": "Standard-library symbol URL originates in checked-in namespace tests."
+}

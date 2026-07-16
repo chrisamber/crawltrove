@@ -1,0 +1,58 @@
+# Swift 6.4 / iOS 27 scrape manifest — edit freely, add framework roots as needed.
+# The driver drains these batches top-to-bottom; re-running skips done batches.
+swift_version: "6.4"
+ios_version: "27"
+sft_include_restricted: true   # synthetic SFT from ALL sources incl. Apple docs
+
+batches:
+  - id: apple-swiftui
+    source: appledocs-docc
+    root: https://developer.apple.com/documentation/swiftui
+    version_hint: "iOS 27 / Swift 6.4"
+    beta: true
+    max_pages: 1500
+
+  - id: apple-foundation
+    source: appledocs-docc
+    root: https://developer.apple.com/documentation/foundation
+    version_hint: "iOS 27"
+    beta: true
+    max_pages: 1500
+
+  - id: apple-swift-stdlib
+    source: appledocs-docc
+    root: https://developer.apple.com/documentation/swift
+    version_hint: "Swift 6.4"
+    beta: true
+    max_pages: 1500
+
+  - id: apple-mapkit
+    source: appledocs-docc
+    root: https://developer.apple.com/documentation/mapkit
+    version_hint: "iOS 27"
+    beta: true
+    max_pages: 1500
+
+  - id: swift-evolution
+    source: swift-evolution
+    version_hint: "Swift 6.4"
+
+  - id: wwdc-2026
+    source: wwdc
+    version_hint: "iOS 27"
+    limit: 0
+
+  - id: wwdc-mapkit
+    source: wwdc
+    version_hint: "iOS 27"
+    limit: 0
+    framework: mapkit
+    keywords: "mapkit,mkmapview,mkmapitem,look around,maps app,geocod,cartograph,annotation"
+
+  - id: swift-org-release-notes
+    source: web
+    corpus_source: swift-book
+    version_hint: "Swift 6.4 / Xcode 27"
+    urls:
+      - https://www.swift.org/blog/
+      - https://developer.apple.com/documentation/xcode-release-notes

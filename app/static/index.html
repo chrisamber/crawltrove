@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrawlTrove</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Style Sheet -->
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="glow-bg"></div>
+    
+    <div class="app-container">
+        <!-- Top Navigation -->
+        <header class="app-header">
+            <div class="logo">
+                <i class="fa-solid fa-box-archive logo-icon"></i>
+                <span class="logo-text">Crawl<span class="accent-text">Trove</span></span>
+            </div>
+            <nav class="view-nav">
+                <button class="view-btn active" id="viewScrape"><i class="fa-solid fa-bolt"></i> Scrape / Crawl</button>
+                <button class="view-btn" id="viewJobs"><i class="fa-solid fa-list-check"></i> Jobs &amp; Runs</button>
+                <button class="view-btn" id="viewLibrary"><i class="fa-solid fa-box-archive"></i> Library</button>
+                <button class="view-btn" id="viewCorpus"><i class="fa-solid fa-database"></i> Corpus</button>
+            </nav>
+            <div class="status-bar">
+                <span class="status-indicator online" id="statusIndicator"></span>
+                <span class="status-text" id="statusText">Checking server API...</span>
+            </div>
+        </header>
+
+        <!-- Main Layout Grid -->
+        <main class="dashboard-grid" id="scrapeView">
+            <!-- Sidebar Panel: Control Center -->
+            <section class="control-panel glass-card">
+                <h2 class="panel-title"><i class="fa-solid fa-sliders"></i> Control Center</h2>
+                
+                <div class="mode-tabs">
+                    <button class="mode-btn active" id="modeScrape"><i class="fa-solid fa-square-rss"></i> Scrape URL</button>
+                    <button class="mode-btn" id="modeCrawl"><i class="fa-solid fa-network-wired"></i> Crawl Site</button>
+                    <button class="mode-btn" id="modeExtract"><i class="fa-solid fa-braille"></i> Extract</button>
+                </div>
+
+                <div class="input-group">
+                    <label for="urlInput"><i class="fa-solid fa-link"></i> Target URL</label>
+                    <input type="url" id="urlInput" placeholder="https://example.com" value="https://news.ycombinator.com">
+                </div>
+
+                <!-- Scraping Options -->
+                <div class="options-container" id="scrapeOptions">
+                    <div class="input-group">
+                        <div class="label-with-val">
+                            <label for="waitSlider"><i class="fa-solid fa-hourglass-start"></i> Rendering Wait Time</label>
+                            <span class="range-val" id="waitVal">1000 ms</span>
+                        </div>
+                        <input type="range" id="waitSlider" min="0" max="8000" step="500" value="1000">
+                        <span class="helper-text">Wait for JS execution & client-side hydration</span>
+                    </div>
+                </div>
+
+                <!-- Crawling Options -->
+                <div class="options-container hidden" id="crawlOptions">
+                    <div class="grid-2col">
+                        <div class="input-group">
+                            <div class="label-with-val">
+                                <label for="limitSlider"><i class="fa-solid fa-list-ol"></i> Page Limit</label>
+                                <span class="range-val" id="limitVal">10 pages</span>
+                            </div>
+                            <input type="range" id="limitSlider" min="2" max="50" step="1" value="10">
+                        </div>
+                        
+                        <div class="input-group">
+                            <div class="label-with-val">
+                                <label for="depthSlider"><i class="fa-solid fa-route"></i> Max Depth</label>
+                                <span class="range-val" id="depthVal">2 hops</span>
+                            </div>
+                            <input type="range" id="depthSlider" min="0" max="4" step="1" value="2">
+                        </div>
+                    </div>
+                    <span class="helper-text">Limits crawled pages strictly to domain of input URL</span>
+
+                    <div class="toggle-group">
+                        <div class="toggle-item">
+                            <div class="toggle-text">
+                                <span class="toggle-title"><i class="fa-solid fa-map"></i> Use Sitemap</span>
+                                <span class="toggle-desc">Seed the frontier from robots.txt / sitemap.xml</span>
+                            </div>
+                            <label class="switch">
+                                <input type="checkbox" id="useSitemapToggle" checked>
+                                <span class="slider-round"></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="toggle-group">
+                        <div class="toggle-item">
+                            <div class="toggle-text">
+                                <span class="toggle-title"><i class="fa-solid fa-camera"></i> Screenshots</span>
+                                <span class="toggle-desc">Save full-page screenshots for browser-rendered pages</span>
+                            </div>
+                            <label class="switch">
+                                <input type="checkbox" id="screenshotsToggle">
+                                <span class="slider-round"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Extract Options -->
+                <div class="options-container hidden" id="extractOptions">
+                    <div class="input-group">
+                        <label for="schemaInput"><i class="fa-solid fa-diagram-project"></i> JSON Schema</label>
+                        <textarea id="schemaInput" class="schema-textarea" rows="9" spellcheck="false" placeholder='{"type": "object", "properties": { ... }}'></textarea>
+                        <p class="form-msg text-error hidden" id="schemaError"></p>
+                    </div>
+                    <div class="input-group">
+                        <label for="promptInput"><i class="fa-solid fa-comment-dots"></i> Prompt <span class="helper-text">(optional)</span></label>
+                        <input type="text" id="promptInput" placeholder="Extraction instructions, e.g. 'Extract the main article'">
+                    </div>
+                    <div class="presets-section">
+                        <span class="presets-title">Schema presets:</span>
+                        <div class="preset-tags">
+                            <span class="preset-tag schema-preset" data-preset="article">Article</span>
+                            <span class="preset-tag schema-preset" data-preset="product">Product</span>
+                            <span class="preset-tag schema-preset" data-preset="contact">Contact</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Common Settings -->
+                <div class="input-group">
+                    <label for="engineSelect"><i class="fa-solid fa-gears"></i> Fetch Engine</label>
+                    <select id="engineSelect">
+                        <option value="auto" selected>Auto — HTTP first, escalate to browser</option>
+                        <option value="http">HTTP — cheap fetch only</option>
+                        <option value="browser">Browser — always render with Playwright</option>
+                    </select>
+                </div>
+                <div class="toggle-group">
+                    <div class="toggle-item">
+                        <div class="toggle-text">
+                            <span class="toggle-title"><i class="fa-solid fa-scissors"></i> Clean HTML Markup</span>
+                            <span class="toggle-desc">Remove navigations, headers, and sidebars</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" id="cleanContentToggle" checked>
+                            <span class="slider-round"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Presets -->
+                <div class="presets-section">
+                    <span class="presets-title">Quick Test Presets:</span>
+                    <div class="preset-tags">
+                        <span class="preset-tag" data-url="https://news.ycombinator.com">Hacker News</span>
+                        <span class="preset-tag" data-url="https://quotes.toscrape.com">Quotes (JS Test)</span>
+                        <span class="preset-tag" data-url="https://en.wikipedia.org/wiki/Web_scraping">Wikipedia</span>
+                    </div>
+                </div>
+
+                <button class="action-btn" id="actionBtn">
+                    <span id="btnText">Scrape Page</span>
+                    <i class="fa-solid fa-circle-notch fa-spin btn-spinner hidden" id="btnSpinner"></i>
+                </button>
+            </section>
+
+            <!-- Viewer Panel: Outputs & Stats -->
+            <section class="viewer-panel glass-card">
+                <!-- Idle State -->
+                <div class="state-container" id="idleState">
+                    <div class="idle-graphic">
+                        <i class="fa-solid fa-circle-nodes pulse-icon"></i>
+                    </div>
+                    <h3>Ready to Extract</h3>
+                    <p>Enter a URL on the left to scrape it or crawl the entire domain. Clean Markdown output optimized for LLMs will display here.</p>
+                </div>
+
+                <!-- Crawl Status Panel (Active Crawl) -->
+                <div class="state-container hidden" id="crawlState">
+                    <div class="crawl-header">
+                        <div class="crawl-info">
+                            <h3>Crawling Website...</h3>
+                            <p id="crawlStatusUrl">Starting crawl job...</p>
+                        </div>
+                        <div class="crawl-metrics">
+                            <div class="metric-box">
+                                <span class="metric-num" id="crawlPagesCount">0</span>
+                                <span class="metric-label">Pages</span>
+                            </div>
+                            <div class="metric-box">
+                                <span class="metric-num text-error" id="crawlErrorsCount">0</span>
+                                <span class="metric-label">Errors</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div class="progress-container">
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" id="crawlProgressBar" style="width: 0%"></div>
+                        </div>
+                        <div class="progress-stats">
+                            <span id="crawlProgressPercent">0% Complete</span>
+                            <span id="crawlProgressJobs">Job ID: Checking...</span>
+                        </div>
+                    </div>
+
+                    <!-- Crawl-level signal aggregate -->
+                    <div class="crawl-aggregate hidden" id="crawlAggregate"></div>
+
+                    <!-- Export links (rendered on crawl completion) -->
+                    <div class="crawl-export-row hidden" id="crawlExportRow"></div>
+
+                    <!-- Crawled Pages Log -->
+                    <div class="crawled-pages-list">
+                        <h4>Discovered Pages (<span id="crawledCountHeader">0</span>)</h4>
+                        <ul class="crawled-list" id="crawledList">
+                            <!-- Populated dynamically -->
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Scrape Output Viewer (Success state) -->
+                <div class="state-container hidden" id="outputState">
+                    <div class="output-header">
+                        <div class="output-title-section">
+                            <h3 id="outputTitle">Page Scraped Successfully</h3>
+                            <p class="output-meta"><i class="fa-solid fa-check-double text-success"></i> Scraped: <span id="outputUrl">https://example.com</span></p>
+                        </div>
+                        <div class="output-actions">
+                            <button class="output-action-btn" id="copyBtn" title="Copy Content"><i class="fa-solid fa-copy"></i> Copy</button>
+                            <button class="output-action-btn" id="downloadBtn" title="Download Markdown"><i class="fa-solid fa-download"></i> Save</button>
+                        </div>
+                    </div>
+
+                    <!-- Always-on corpus signal bar -->
+                    <div class="signal-bar" id="signalBar"></div>
+
+                    <!-- Tabs -->
+                    <div class="output-tabs">
+                        <button class="tab-btn active" data-tab="markdownTab"><i class="fa-brands fa-markdown"></i> Markdown</button>
+                        <button class="tab-btn" data-tab="htmlTab"><i class="fa-solid fa-code"></i> Raw HTML</button>
+                        <button class="tab-btn" data-tab="signalsTab"><i class="fa-solid fa-gauge-high"></i> Signals</button>
+                        <button class="tab-btn hidden" data-tab="extractTab" id="extractTabBtn"><i class="fa-solid fa-braille"></i> Extracted JSON</button>
+                    </div>
+
+                    <!-- Tab Contents -->
+                    <div class="tab-contents">
+                        <div class="tab-content active" id="markdownTab">
+                            <pre><code id="markdownOutput" class="language-markdown"></code></pre>
+                        </div>
+                        <div class="tab-content" id="htmlTab">
+                            <pre><code id="htmlOutput" class="language-html"></code></pre>
+                        </div>
+                        <div class="tab-content" id="signalsTab">
+                            <!-- Populated dynamically by signals.js -->
+                        </div>
+                        <div class="tab-content" id="extractTab">
+                            <pre><code id="extractOutput" class="language-json"></code></pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Error State -->
+                <div class="state-container hidden" id="errorState">
+                    <div class="error-graphic">
+                        <i class="fa-solid fa-circle-exclamation text-error"></i>
+                    </div>
+                    <h3 id="errorHeading">Scrape Failed</h3>
+                    <p id="errorDesc">The request timed out or was blocked by the host.</p>
+                    <button class="action-btn-secondary" id="backBtn">Dismiss</button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Jobs & Runs view (hidden until selected) -->
+        <main class="dashboard-grid hidden" id="jobsView">
+            <!-- Create Job panel -->
+            <section class="control-panel glass-card">
+                <h2 class="panel-title"><i class="fa-solid fa-plus"></i> New Job</h2>
+
+                <div class="input-group">
+                    <label for="jobName"><i class="fa-solid fa-tag"></i> Name <span class="helper-text">(optional)</span></label>
+                    <input type="text" id="jobName" placeholder="hn front page">
+                </div>
+
+                <div class="input-group">
+                    <label for="jobUrl"><i class="fa-solid fa-link"></i> Target URL</label>
+                    <input type="url" id="jobUrl" placeholder="https://example.com">
+                </div>
+
+                <div class="grid-2col">
+                    <div class="input-group">
+                        <label for="jobKind"><i class="fa-solid fa-gear"></i> Kind</label>
+                        <select id="jobKind">
+                            <option value="scrape">Scrape</option>
+                            <option value="crawl">Crawl</option>
+                        </select>
+                    </div>
+                    <div class="input-group">
+                        <label for="jobSchedule"><i class="fa-solid fa-clock"></i> Schedule</label>
+                        <input type="text" id="jobSchedule" placeholder="@hourly · 15m · blank">
+                    </div>
+                </div>
+                <span class="helper-text">Schedule is optional: an interval like <code>15m</code>/<code>2h</code>, a preset like <code>@daily</code>, or blank for manual-only.</span>
+
+                <button class="action-btn" id="createJobBtn">
+                    <span id="createJobText">Create Job</span>
+                    <i class="fa-solid fa-circle-notch fa-spin btn-spinner hidden" id="createJobSpinner"></i>
+                </button>
+                <p class="form-msg hidden" id="jobFormMsg"></p>
+            </section>
+
+            <!-- Jobs + Runs viewer -->
+            <section class="viewer-panel glass-card jobs-viewer">
+                <div class="jobs-section">
+                    <div class="section-head">
+                        <h3><i class="fa-solid fa-folder-tree"></i> Jobs (<span id="jobsCount">0</span>)</h3>
+                        <button class="action-btn-secondary btn-sm" id="refreshJobsBtn"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                    </div>
+                    <ul class="crawled-list jobs-list" id="jobsList"></ul>
+                </div>
+
+                <div class="runs-section">
+                    <div class="section-head">
+                        <h3><i class="fa-solid fa-play"></i> Runs <span id="runsFilterLabel" class="runs-filter hidden"></span></h3>
+                        <button class="action-btn-secondary btn-sm hidden" id="clearRunsFilterBtn"><i class="fa-solid fa-xmark"></i> All jobs</button>
+                    </div>
+                    <ul class="crawled-list runs-list" id="runsList"></ul>
+                </div>
+            </section>
+        </main>
+
+        <!-- Library view (hidden until selected) -->
+        <main class="dashboard-grid library-grid hidden" id="libraryView">
+            <section class="viewer-panel glass-card library-viewer">
+                <div class="semantic-section">
+                    <div class="section-head">
+                        <h3><i class="fa-solid fa-magnifying-glass"></i> Hybrid Search</h3>
+                    </div>
+                    <form class="semantic-search-form" id="semanticForm">
+                        <input type="text" id="semanticQuery" class="semantic-input"
+                               placeholder="Search everything by meaning — e.g. &quot;actor isolation in Swift 6&quot;" autocomplete="off">
+                        <select id="semanticKind" class="semantic-kind">
+                            <option value="">All</option>
+                            <option value="scrape">Scrapes</option>
+                            <option value="crawl">Crawls</option>
+                            <option value="research">Research</option>
+                            <option value="corpus">Corpus</option>
+                        </select>
+                        <select id="semanticMode" class="semantic-kind">
+                            <option value="hybrid">Hybrid</option>
+                            <option value="semantic">Semantic</option>
+                            <option value="keyword">Keyword</option>
+                        </select>
+                        <select id="semanticNamespace" class="semantic-kind" data-facet="namespace">
+                            <option value="">All namespaces</option>
+                        </select>
+                        <select id="semanticBucket" class="semantic-kind" data-facet="bucket">
+                            <option value="">All license buckets</option>
+                        </select>
+                        <select id="semanticTier" class="semantic-kind" data-facet="tier">
+                            <option value="">All quality tiers</option>
+                        </select>
+                        <select id="semanticFramework" class="semantic-kind" data-facet="framework">
+                            <option value="">All frameworks</option>
+                        </select>
+                        <button type="submit" class="action-btn-secondary btn-sm" id="semanticBtn"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
+                    </form>
+                    <p class="form-msg hidden" id="semanticMsg"></p>
+                    <ul class="crawled-list semantic-list" id="semanticList"></ul>
+                </div>
+
+                <div class="research-section">
+                    <div class="section-head">
+                        <h3><i class="fa-solid fa-flask"></i> Research Runs (<span id="researchCount">0</span>)</h3>
+                        <button class="action-btn-secondary btn-sm" id="refreshResearchBtn"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                    </div>
+                    <p class="form-msg hidden" id="libraryMsg"></p>
+                    <ul class="crawled-list research-list" id="researchList"></ul>
+                </div>
+
+                <div class="artifacts-section">
+                    <div class="section-head">
+                        <h3><i class="fa-solid fa-box-archive"></i> Artifacts (<span id="artifactsCount">0</span>)</h3>
+                        <div class="artifacts-controls">
+                            <div class="preset-tags artifact-filters" id="artifactFilters">
+                                <span class="preset-tag filter-chip active" data-kind="all">All</span>
+                                <span class="preset-tag filter-chip" data-kind="scrape">Scrapes</span>
+                                <span class="preset-tag filter-chip" data-kind="crawl">Crawls</span>
+                                <span class="preset-tag filter-chip" data-kind="research">Research</span>
+                            </div>
+                            <button class="action-btn-secondary btn-sm" id="refreshArtifactsBtn"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                        </div>
+                    </div>
+                    <ul class="crawled-list artifacts-list" id="artifactsList"></ul>
+                </div>
+            </section>
+        </main>
+
+        <!-- Corpus view (hidden until selected) -->
+        <main class="dashboard-grid library-grid hidden" id="corpusView">
+            <section class="viewer-panel glass-card library-viewer">
+                <div class="corpus-stats-section">
+                    <div class="section-head">
+                        <h3><i class="fa-solid fa-database"></i> Corpus (<span id="corpusTotal">0</span> records)</h3>
+                        <button class="action-btn-secondary btn-sm" id="refreshCorpusBtn"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                    </div>
+                    <div class="corpus-stat-tiles" id="corpusStatTiles"></div>
+                </div>
+
+                <div class="corpus-filters-section">
+                    <div class="corpus-filter-row">
+                        <label>Target</label>
+                        <div class="preset-tags corpus-chips" id="corpusTargetChips"></div>
+                    </div>
+                    <div class="corpus-filter-row">
+                        <label>Namespace</label>
+                        <div class="preset-tags corpus-chips" id="corpusNamespaceChips"></div>
+                    </div>
+                    <div class="corpus-filter-row">
+                        <label>Tier</label>
+                        <div class="preset-tags corpus-chips" id="corpusTierChips"></div>
+                    </div>
+                    <form class="semantic-search-form" id="corpusForm">
+                        <input type="text" id="corpusQuery" class="semantic-input"
+                               placeholder="Filter records by substring…" autocomplete="off">
+                        <button type="submit" class="action-btn-secondary btn-sm"><i class="fa-solid fa-filter"></i> Filter</button>
+                        <a class="action-btn-secondary btn-sm" id="corpusSemanticLink" href="#"><i class="fa-solid fa-magnifying-glass"></i> Semantic search this</a>
+                    </form>
+                    <p class="form-msg hidden" id="corpusMsg"></p>
+                </div>
+
+                <div class="corpus-records-section">
+                    <ul class="crawled-list corpus-list" id="corpusList"></ul>
+                    <div class="corpus-pager">
+                        <button class="action-btn-secondary btn-sm" id="corpusPrevBtn" disabled><i class="fa-solid fa-chevron-left"></i> Prev</button>
+                        <span id="corpusPageLabel">—</span>
+                        <button class="action-btn-secondary btn-sm" id="corpusNextBtn" disabled>Next <i class="fa-solid fa-chevron-right"></i></button>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Script files -->
+    <script src="/static/signals.js"></script>
+    <script src="/static/app.js"></script>
+    <script src="/static/jobs.js"></script>
+    <script src="/static/library.js"></script>
+    <script src="/static/semantic.js"></script>
+    <script src="/static/corpus.js"></script>
+</body>
+</html>

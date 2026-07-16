@@ -1,0 +1,10 @@
+{
+  "name": "swiftui-text-conceptual",
+  "query": "Display a read-only string in a SwiftUI interface",
+  "relevantIds": [
+    "corpus:url:https://developer.apple.com/documentation/swiftui/text"
+  ],
+  "tags": ["apple", "swiftui", "conceptual"],
+  "filters": {"kind": "corpus", "namespace": "apple-framework"},
+  "notes": "SwiftUI Text URL originates in checked-in corpus build tests."
+}

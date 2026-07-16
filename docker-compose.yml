@@ -1,0 +1,88 @@
+services:
+  crawltrove:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:8000"
+    init: true
+    ipc: host
+    user: pwuser
+    read_only: true
+    security_opt:
+      - seccomp=./seccomp_profile.json
+    tmpfs:
+      - /tmp
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Optional structured-extraction backend. Unset keeps /api/extract at 501.
+      - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
+      - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
+      - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
+      - AI_GATEWAY_API_KEY=${AI_GATEWAY_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      - EXTRACT_MODEL=${EXTRACT_MODEL:-}
+      - VISION_LLM_MODEL=${VISION_LLM_MODEL:-}
+      # Semantic search: an OpenAI-compatible /v1/embeddings server.
+      # Unset -> /api/search/semantic returns 501 and index write-hooks no-op.
+      - EMBEDDINGS_BASE_URL=${EMBEDDINGS_BASE_URL:-}
+      - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-}
+      - EMBEDDINGS_API_KEY=${EMBEDDINGS_API_KEY:-}
+      - SEARXNG_BASE_URL=${SEARXNG_BASE_URL:-}
+      - BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY:-}
+      - WEBHOOK_URL=${WEBHOOK_URL:-}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_FORMAT=${LOG_FORMAT:-}
+      # The container listens on its Compose network, while this value tells the
+      # startup guard which host address Docker publishes. Changing BIND_ADDRESS
+      # away from loopback therefore requires auth or an explicit unsafe opt-in.
+      - PUBLISHED_BIND_ADDRESS=${BIND_ADDRESS:-127.0.0.1}
+      - APP_USERNAME=${APP_USERNAME:-admin}
+      - APP_PASSWORD=${APP_PASSWORD:-}
+      - API_KEYS=${API_KEYS:-}
+      - ALLOW_UNAUTHENTICATED=${ALLOW_UNAUTHENTICATED:-false}
+      - ALLOW_PRIVATE_NETWORKS=${ALLOW_PRIVATE_NETWORKS:-false}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - CHROMIUM_DISABLE_SANDBOX=${CHROMIUM_DISABLE_SANDBOX:-false}
+      - DATA_DIR=/workspace/data
+      # Persistence defaults to the bundled Postgres service below.
+      # Override DATABASE_URL in the host env to point elsewhere, or set it to an
+      # empty string to run the legacy file-only mode (no database).
+      - DATABASE_URL=${DATABASE_URL-postgresql://crawltrove:crawltrove@db:5432/crawltrove}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./app:/workspace/app:ro
+      - crawltrove_data:/workspace/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  db:
+    image: postgres:16
+    environment:
+      - POSTGRES_USER=crawltrove
+      - POSTGRES_PASSWORD=crawltrove
+      - POSTGRES_DB=crawltrove
+    # No published port — only CrawlTrove reaches it over the Compose
+    # network, so the default credentials never leave the host.
+    volumes:
+      - crawltrove_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crawltrove -d crawltrove"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  crawltrove_data:
+  crawltrove_pgdata:
