@@ -1,0 +1,37 @@
+# Epic 3 S5 collector batches. These four sources write standard crawl
+# artifacts to data/crawls/ (via app.corpus.crawl_shape); feed each into
+# scripts/build_corpus.py --from-crawl <artifact> --source <source>.
+#
+# Kept separate from scripts/swift64_manifest.yaml (the Swift 6.4 drain the loop
+# driver runs) — these run standalone. Each source has a license_buckets.py
+# entry; tutorials/github pick a license-specific source id at collect time.
+collectors:
+  - id: swiftorg
+    source: swiftorg                 # -> swift-org-permissive (Apache-2.0; RAG + DAPT)
+    command: scripts/scrape_swiftorg.py
+    roots:
+      - https://www.swift.org/blog/
+      - https://www.swift.org/documentation/
+      - https://www.swift.org/getting-started/
+
+  - id: swift-forums-evolution
+    source: swift-forums             # -> community-review-required (RAG only)
+    command: scripts/scrape_swift_forums.py --category evolution/18 --accepted-only
+
+  - id: swift-forums-using-swift
+    source: swift-forums
+    command: scripts/scrape_swift_forums.py --category using-swift/6 --accepted-only
+
+  - id: tutorials
+    source: tutorials-*              # picked per page from tutorials_allowlist.yaml
+    command: scripts/scrape_tutorials.py --config scripts/tutorials_allowlist.yaml
+
+  - id: github-docs
+    source: github-*                 # picked per repo from its LICENSE (SPDX)
+    command: scripts/scrape_github_docs.py
+    repos:
+      - apple/swift-nio
+      - vapor/vapor
+      - apple/swift-argument-parser
+      - apple/swift-collections
+      - apple/swift-algorithms

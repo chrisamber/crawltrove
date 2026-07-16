@@ -1,0 +1,106 @@
+{
+  "name": "cosmic-drift-release",
+  "prompt": "Extract the release as structured data. Convert track durations to total seconds.",
+  "markdown": "Cosmic Drift — \"Analog Horizons\" (2026 Reissue)\n\nLabel: Nebula Records · Catalog: NR-0427\n\nA lush limited reissue pressed on 180g heavyweight vinyl, spread across\ntwo translucent blue discs at 45 RPM for maximum fidelity.\n\nPerformed by Cosmic Drift (lead synths) with Mara Vance on drums and\nan uncredited session bassist.\n\nTracklist\nA1. Ignition (4:12) — synth programming by Cosmic Drift, mixing by Leo Park\nA2. Weightless (6:48) — vocals by Mara Vance\nB1. Re-entry — engineered by Leo Park   [no runtime printed on the sleeve]\n\nReleased under a Creative Commons BY-NC license.",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "title": { "type": "string", "description": "The album/release title only — exclude the artist name and edition tags like '(Reissue)'" },
+      "catalog_number": { "type": "string", "pattern": "^NR-[0-9]{4}$" },
+      "artists": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string" },
+            "role": { "type": "string", "enum": ["primary", "performer", "producer", "engineer"], "description": "primary = the headline/lead artist; performer = a contributing musician" }
+          },
+          "required": ["name", "role"]
+        }
+      },
+      "format": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "medium": { "type": "string", "const": "vinyl" },
+              "rpm": { "type": "integer", "enum": [33, 45] },
+              "disc_count": { "type": "integer" },
+              "color": { "type": ["string", "null"] }
+            },
+            "required": ["medium", "rpm", "disc_count", "color"]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "medium": { "type": "string", "const": "digital" },
+              "codec": { "type": "string", "enum": ["flac", "mp3", "aac"] },
+              "bitrate_kbps": { "type": "integer" }
+            },
+            "required": ["medium", "codec", "bitrate_kbps"]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "medium": { "type": "string", "const": "cassette" },
+              "tape_type": { "type": "string", "enum": ["normal", "chrome", "metal"] }
+            },
+            "required": ["medium", "tape_type"]
+          }
+        ]
+      },
+      "tracks": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "position": { "type": "string" },
+            "title": { "type": "string" },
+            "duration_seconds": { "type": ["integer", "null"] },
+            "credits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "name": { "type": "string" },
+                  "contribution": { "type": "string", "enum": ["programming", "mixing", "vocals", "engineering", "production", "performance"] }
+                },
+                "required": ["name", "contribution"]
+              }
+            }
+          },
+          "required": ["position", "title", "duration_seconds", "credits"]
+        }
+      },
+      "license": { "type": ["string", "null"], "enum": ["CC-BY", "CC-BY-SA", "CC-BY-NC", "CC0", null] }
+    },
+    "required": ["title", "catalog_number", "artists", "format", "tracks", "license"]
+  },
+  "expected": {
+    "title": "Analog Horizons",
+    "catalog_number": "NR-0427",
+    "artists": [
+      { "name": "Cosmic Drift", "role": "primary" },
+      { "name": "Mara Vance", "role": "performer" }
+    ],
+    "format": { "medium": "vinyl", "rpm": 45, "disc_count": 2, "color": "translucent blue" },
+    "tracks": [
+      { "position": "A1", "title": "Ignition", "duration_seconds": 252,
+        "credits": [ { "name": "Cosmic Drift", "contribution": "programming" }, { "name": "Leo Park", "contribution": "mixing" } ] },
+      { "position": "A2", "title": "Weightless", "duration_seconds": 408,
+        "credits": [ { "name": "Mara Vance", "contribution": "vocals" } ] },
+      { "position": "B1", "title": "Re-entry", "duration_seconds": null,
+        "credits": [ { "name": "Leo Park", "contribution": "engineering" } ] }
+    ],
+    "license": "CC-BY-NC"
+  }
+}

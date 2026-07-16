@@ -1,0 +1,16 @@
+# Curated allowlist of permissively-licensed Swift tutorial sources (Epic 3 S5).
+# Each entry asserts the site's content license; the collector confirms it
+# per-page with license_detect before routing to a permissive bucket, and drops
+# any page whose detected license conflicts with the asserted one.
+#
+# expected_license must be a CC id the pipeline understands:
+#   CC-BY-4.0 | CC-BY-SA-4.0 | CC0-1.0
+# Add roots you have verified are permissively licensed.
+sources:
+  - name: swift-org-tutorials
+    root: https://www.swift.org/getting-started/
+    expected_license: CC-BY-4.0
+  # Examples (verify the license before enabling):
+  # - name: some-blog
+  #   root: https://example.com/swift/
+  #   expected_license: CC-BY-4.0

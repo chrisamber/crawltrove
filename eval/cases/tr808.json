@@ -1,0 +1,38 @@
+{
+  "name": "tr808-listing",
+  "prompt": "Extract the listing fields.",
+  "markdown": "Vintage Roland TR-808 Drum Machine — Restored Unit\n\nPosted on the 3rd of March, 2026 by the shop.\n\nThis fully serviced TR-808 is a legend of a machine. We replaced the\nelectrolytic caps and calibrated every voice. Asking nine hundred and\nfifty dollars or near offer. Ships worldwide from Berlin.\n\nCondition: excellent, light cosmetic wear on the casing.\nTags: analog, drum-machine, vintage, roland\n\n(No warranty information or seller rating is listed on this page.)",
+  "schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "title": { "type": "string" },
+      "category": { "type": "string", "enum": ["instrument", "audio-gear", "vinyl", "other"] },
+      "price": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "amount": { "type": "number" },
+          "currency": { "type": "string", "enum": ["USD", "EUR", "GBP"] }
+        },
+        "required": ["amount", "currency"]
+      },
+      "listed_date": { "type": ["string", "null"], "description": "ISO 8601 (YYYY-MM-DD) if a date is present, else null" },
+      "condition": { "type": ["string", "null"], "enum": ["new", "excellent", "good", "fair", "poor", null] },
+      "tags": { "type": "array", "items": { "type": "string" } },
+      "warranty": { "type": ["string", "null"] },
+      "seller_rating": { "type": ["number", "null"] }
+    },
+    "required": ["title", "category", "price", "listed_date", "condition", "tags", "warranty", "seller_rating"]
+  },
+  "expected": {
+    "title": "Vintage Roland TR-808 Drum Machine — Restored Unit",
+    "category": "audio-gear",
+    "price": { "amount": 950, "currency": "USD" },
+    "listed_date": "2026-03-03",
+    "condition": "excellent",
+    "tags": ["analog", "drum-machine", "vintage", "roland"],
+    "warranty": null,
+    "seller_rating": null
+  }
+}

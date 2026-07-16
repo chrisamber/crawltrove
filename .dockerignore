@@ -1,0 +1,22 @@
+.git
+.github
+.DS_Store
+.env
+.env.*
+!.env.example
+.pytest_cache
+.ruff_cache
+.venv
+.venv-*
+__pycache__
+*.py[cod]
+data
+scrapes
+tmp
+.claude
+.design-sync
+# Third-party scraper scratch cache; local-only and never copied into the image.
+.firecrawl
+docs
+tests
+swift_book.epub

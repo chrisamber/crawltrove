@@ -1,0 +1,10 @@
+{
+  "name": "swiftui-view-task-exact",
+  "query": "View.task(priority:_:)",
+  "relevantIds": [
+    "corpus:url:https://developer.apple.com/documentation/swiftui/view/task(priority:_:)"
+  ],
+  "tags": ["apple", "swiftui", "exact-symbol"],
+  "filters": {"kind": "corpus", "namespace": "apple-framework"},
+  "notes": "Exact SwiftUI symbol lookup; URL originates in the checked-in corpus schema tests."
+}

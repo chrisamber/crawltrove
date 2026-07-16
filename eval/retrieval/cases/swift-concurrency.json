@@ -1,0 +1,10 @@
+{
+  "name": "swift-concurrency-conceptual",
+  "query": "How do Swift actors protect mutable state from data races?",
+  "relevantIds": [
+    "corpus:url:https://docs.swift.org/swift-book/documentation/the-swift-programming-language/concurrency"
+  ],
+  "tags": ["swift", "concurrency", "conceptual"],
+  "filters": {"kind": "corpus", "namespace": "swift-language"},
+  "notes": "Conceptual query against the Swift book concurrency chapter used by namespace tests."
+}

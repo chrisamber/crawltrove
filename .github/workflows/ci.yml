@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_PG_ADMIN_DSN: postgresql://postgres:postgres@localhost:5432/postgres
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/crawltrove_test
+      REQUIRE_TEST_DATABASE: "true"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Build supported Docker runtime
+        run: docker compose build
+
+      - name: Verify artifact migration command
+        run: |
+          mkdir -p "$RUNNER_TEMP/crawltrove-migration"
+          printf 'migration-ok\n' > "$RUNNER_TEMP/crawltrove-migration/check.txt"
+          docker compose run --rm --no-deps \
+            -v "$RUNNER_TEMP/crawltrove-migration:/migration-source:ro" \
+            crawltrove sh -c 'cp -R /migration-source/. /workspace/data/'
+          docker compose run --rm --no-deps \
+            crawltrove test -f /workspace/data/check.txt
+
+      - name: Start supported Docker runtime
+        run: docker compose up -d --wait --wait-timeout 120
+
+      - name: Verify running containers and health endpoint
+        run: |
+          docker compose ps --status running
+          curl --fail --show-error --silent http://127.0.0.1:8000/api/health |
+            python -c 'import json, sys; health = json.load(sys.stdin); assert health["status"] == "healthy" and health["service"] == "crawltrove" and health["db"] == "up", health; print(json.dumps(health))'
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop supported Docker runtime
+        if: always()
+        run: docker compose down --volumes

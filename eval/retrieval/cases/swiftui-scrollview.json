@@ -1,0 +1,10 @@
+{
+  "name": "swiftui-scrollview-conceptual",
+  "query": "A SwiftUI container that lets content scroll vertically",
+  "relevantIds": [
+    "corpus:url:https://developer.apple.com/documentation/swiftui/scrollview"
+  ],
+  "tags": ["apple", "swiftui", "conceptual"],
+  "filters": {"kind": "corpus", "namespace": "apple-framework"},
+  "notes": "SwiftUI page URL is already used by checked-in SFT synthesis tests."
+}

@@ -1,0 +1,26 @@
+fastapi>=0.110.0
+uvicorn>=0.28.0
+playwright==1.60.0
+beautifulsoup4>=4.12.3
+markdownify>=1.2.0
+pydantic>=2.6.4
+trafilatura>=2.1.0
+curl_cffi>=0.15.0
+datasketch>=1.10.0
+py3langid>=0.3.0
+# Semantic search (Epic 3) — file-based vector index at data/index/vectors.db.
+# Precompiled extension; loaded via enable_load_extension. The index is a no-op
+# unless EMBEDDINGS_BASE_URL is set, and disables itself if the extension can't
+# load, so this never changes the file-only behaviour.
+sqlite-vec>=0.1.6
+tf-playwright-stealth>=1.2.0
+anthropic>=0.109.0
+pypdfium2>=4.30.0
+pytesseract>=0.3.10
+Pillow>=10.0.0
+# Persistence (Epic 1) — async Postgres driver. The whole DB layer is gated
+# behind DATABASE_URL, so with it unset the service runs exactly as before.
+asyncpg>=0.29.0
+# Runtime HTTP client and corpus manifest parser.
+httpx>=0.27.0
+PyYAML>=6.0
