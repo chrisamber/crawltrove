@@ -9,9 +9,26 @@ The service includes a local dashboard, a JSON API, optional Postgres
 persistence, structured extraction through an LLM, OCR, hybrid retrieval, and
 restart-safe crawl and research jobs.
 
+![CrawlTrove dashboard](docs/assets/dashboard.png)
+
 > Crawl responsibly. You are responsible for respecting website terms,
 > robots.txt, rate limits, privacy, and the licenses of collected content. The
 > MIT license covers CrawlTrove itself, not data produced with it.
+
+## See it in action
+
+Scrape a public URL, inspect the clean Markdown, then drill into provenance and
+corpus-quality signals.
+
+![CrawlTrove scrape workflow](docs/assets/demo.gif)
+
+### Clean Markdown output
+
+![CrawlTrove Markdown extraction result](docs/assets/result.png)
+
+### Corpus-ready signals
+
+![CrawlTrove quality, deduplication, license, language, and provenance signals](docs/assets/signals.png)
 
 ## Quick start
 
