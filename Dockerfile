@@ -24,9 +24,11 @@ COPY scripts/ ./scripts/
 
 RUN mkdir -p /workspace/data && chown -R pwuser:pwuser /workspace
 
-USER pwuser
-
 EXPOSE 8000
+
+# Railway mounts volumes as root. Repair the mount point, then the entrypoint
+# drops privileges before it executes the application command.
+ENTRYPOINT ["python", "-m", "app.container_entrypoint"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
