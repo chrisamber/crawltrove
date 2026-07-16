@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,8 +25,11 @@ def test_container_repairs_volume_then_runs_as_pwuser(monkeypatch, tmp_path):
     outside_link = data_dir / "outside-link"
     outside_link.symlink_to(outside_dir, target_is_directory=True)
     calls = []
-    user = SimpleNamespace(pw_name="pwuser", pw_uid=1000, pw_gid=1000)
+    user = SimpleNamespace(
+        pw_name="pwuser", pw_uid=1000, pw_gid=1000, pw_dir="/home/pwuser",
+    )
     monkeypatch.setenv("DATA_DIR", str(data_dir))
+    monkeypatch.setenv("HOME", "/root")
     monkeypatch.setattr(container_entrypoint.os, "geteuid", lambda: 0)
     monkeypatch.setattr(container_entrypoint.pwd, "getpwnam", lambda _name: user)
     monkeypatch.setattr(
@@ -54,6 +58,7 @@ def test_container_repairs_volume_then_runs_as_pwuser(monkeypatch, tmp_path):
     container_entrypoint.main(["uvicorn", "app.main:app"])
 
     assert data_dir.is_dir()
+    assert os.environ["HOME"] == "/home/pwuser"
     chowns = calls[:4]
     assert {call[1] for call in chowns} == {
         data_dir, research_dir, checkpoint, outside_link,
