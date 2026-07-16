@@ -14,9 +14,18 @@ def main(command=None) -> None:
         user = pwd.getpwnam("pwuser")
         data_dir = Path(os.environ.get("DATA_DIR", "/workspace/data"))
         data_dir.mkdir(parents=True, exist_ok=True)
-        # ponytail: only the mount root needs repair; recurse if a future
-        # root-running release creates nested files.
-        os.chown(data_dir, user.pw_uid, user.pw_gid)
+        # Existing Railway volumes may contain root-owned descendants.
+        # ponytail: O(n) startup scan; use a migration marker if volume size
+        # makes this meaningfully slow.
+        os.chown(data_dir, user.pw_uid, user.pw_gid, follow_symlinks=False)
+        for root, dirs, files in os.walk(data_dir):
+            for name in dirs + files:
+                os.chown(
+                    Path(root, name),
+                    user.pw_uid,
+                    user.pw_gid,
+                    follow_symlinks=False,
+                )
         os.initgroups(user.pw_name, user.pw_gid)
         os.setgid(user.pw_gid)
         os.setuid(user.pw_uid)
