@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # backup_db.sh — pg_dump the Postgres index to a gzipped file under
-# data/backups/, with N-day retention (Epic 2, E2.S3).
+# data/backups/, with N-day retention.
 #
 # The database is an additive index; the files under data/ remain the source of
 # truth (see backup_data.sh). This snapshot makes point-in-time restore of the
@@ -17,7 +17,7 @@
 # (restore into a fresh/empty database; the dump is a plain-SQL schema+data dump.)
 #
 # Cron example (daily at 03:30):
-#   30 3 * * *  cd /path/to/web-scraper && DATABASE_URL=... scripts/backup_db.sh
+#   30 3 * * *  cd /path/to/crawltrove && DATABASE_URL=... scripts/backup_db.sh
 set -euo pipefail
 
 if [[ -z "${DATABASE_URL:-}" ]]; then

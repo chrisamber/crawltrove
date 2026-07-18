@@ -26,10 +26,10 @@ data/corpus/
 data/metadata/
 scrapes/
 
-# Brainstorming visual companion
+# Local development metadata
+.agents/
+.codex/
 .superpowers/
-
-# Local agent config and third-party scraper scratch; never distributed.
 .claude/
 .firecrawl/
 
