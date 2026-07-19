@@ -6,11 +6,15 @@ services:
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:8000"
     init: true
-    ipc: host
     user: pwuser
     read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_CHROOT
     security_opt:
       - seccomp=./seccomp_profile.json
+      - no-new-privileges:true
     tmpfs:
       - /tmp
     environment:
@@ -54,7 +58,6 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./app:/workspace/app:ro
       - crawltrove_data:/workspace/data
     depends_on:
       db:

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -49,3 +51,14 @@ def test_compose_isolates_renamed_storage_and_documents_upgrade():
     assert "cp -R /migration-source/. /workspace/data/" in readme
     assert "cp -a /migration-source" not in readme
     assert "permanently\ndeletes both the local database and all saved scrape artifacts" in readme
+
+
+def test_compose_drops_privileges_without_host_ipc():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    service = compose["services"]["crawltrove"]
+
+    assert "ipc" not in service
+    assert service["cap_drop"] == ["ALL"]
+    assert service["cap_add"] == ["SYS_CHROOT"]
+    assert "no-new-privileges:true" in service["security_opt"]
+    assert not any("/workspace/app" in volume for volume in service["volumes"])
