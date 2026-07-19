@@ -16,11 +16,11 @@ checks below pass. Run commands from the repository root unless noted.
   release branch.
 - [x] No scraped third-party documentation, generated corpus, database, or
   downloaded archive is tracked.
-- [ ] Re-run the redacted tracked-tree and publish-history secret scans without
+- [x] Re-run the redacted tracked-tree and publish-history secret scans without
   printing any suspected value.
-- [ ] Confirm repository visibility, description, topics, license, README,
+- [x] Confirm repository visibility, description, topics, license, README,
   contribution guidance, security policy, and default branch.
-- [ ] Confirm the publish diff and commit subjects contain no private workflow
+- [x] Confirm the publish diff and commit subjects contain no private workflow
   or process residue.
 
 ## 2. Release notes and version
@@ -38,27 +38,27 @@ Do not run these concurrently; they share the checkout, pytest cache, Docker
 state, and data volumes.
 
 - [x] Focused MCP and authentication suite: `20 passed`.
-- [ ] Install the supported Python 3.11 dependencies in a clean environment and
+- [x] Install the supported Python 3.11 dependencies in a clean environment and
   run `pip check`.
-- [ ] Run the full suite from a cleared cache:
+- [x] Run the full suite from a cleared cache: `455 passed, 29 skipped`.
 
   ```bash
   .venv/bin/python -m pytest --cache-clear -q
   ```
 
-- [ ] Validate the Compose configuration:
+- [x] Validate the Compose configuration:
 
   ```bash
   docker compose config --quiet
   ```
 
-- [ ] Build the supported runtime from fresh layers:
+- [x] Build the supported runtime from fresh layers:
 
   ```bash
   docker compose build --no-cache
   ```
 
-- [ ] Start an isolated stack and verify both containers and the HTTP service:
+- [x] Start an isolated stack and verify both containers and the HTTP service:
 
   ```bash
   PORT=18000 docker compose -p crawltrove-v02-push-verify \
@@ -70,13 +70,13 @@ state, and data volumes.
   The response must report `status=healthy`, `service=crawltrove`, `db=up`, and
   `version=0.2.0`.
 
-- [ ] Stop the isolated stack and delete only its fresh verification volumes:
+- [x] Stop the isolated stack and delete only its fresh verification volumes:
 
   ```bash
   docker compose -p crawltrove-v02-push-verify down --volumes
   ```
 
-- [ ] Confirm `git diff --check` passes and the worktree is clean.
+- [x] Confirm `git diff --check` passes and the worktree is clean.
 
 ## 4. Pull request gate
 
