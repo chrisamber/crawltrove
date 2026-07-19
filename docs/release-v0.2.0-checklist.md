@@ -10,7 +10,7 @@ checks below pass. Run commands from the repository root unless noted.
 
 ## 1. Publication boundary
 
-- [x] Work is on `codex/release-v0.2`, not `main`.
+- [x] Work is on `release/v0.2`, not `main`.
 - [x] The branch was created from current `origin/main`.
 - [x] Only the audited MCP and public-hygiene changes were carried onto the
   release branch.
@@ -80,7 +80,7 @@ state, and data volumes.
 
 ## 4. Pull request gate
 
-- [ ] Push `codex/release-v0.2` to `origin` and open a pull request to `main`.
+- [ ] Push `release/v0.2` to `origin` and open a pull request to `main`.
 - [ ] Confirm the PR diff contains only the intended v0.2.0 scope.
 - [ ] Require PR CI to pass, including PostgreSQL tests, Compose validation,
   Docker build, artifact migration, running-container proof, and health curl.
