@@ -1,7 +1,6 @@
-"""Executable guards for the CLAUDE.md architectural invariants.
+"""Executable guards for the service architectural invariants.
 
-These are the merge gate for subagent-driven development: any change a
-subagent returns must keep this file green. Each guard also proves it has
+These are the merge gate for repository changes. Each guard also proves it has
 teeth by detecting a synthetic violation.
 """
 import ast

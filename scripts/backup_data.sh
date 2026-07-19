@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # backup_data.sh — tar+gzip the on-disk artifacts (the source of truth) under
-# data/backups/, with N-day retention (Epic 2, E2.S3).
+# data/backups/, with N-day retention.
 #
 # Bundles the scrape/crawl/run artifacts AND the dedup index so a restore brings
 # back both the corpus outputs and the near-dup state. Excludes data/backups
@@ -19,7 +19,7 @@
 #   aws s3 cp <archive> "$BACKUP_S3_URI/"
 #
 # Cron example (daily at 03:45):
-#   45 3 * * *  cd /path/to/web-scraper && scripts/backup_data.sh
+#   45 3 * * *  cd /path/to/crawltrove && scripts/backup_data.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

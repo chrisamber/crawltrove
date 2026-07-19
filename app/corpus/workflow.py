@@ -1,10 +1,10 @@
 """In-process fan-out runtime for the offline corpus drain.
 
-A small-scale take on Claude Code's dynamic-workflow mechanics: named phases, a
-bounded-parallel fan-out (a barrier — it awaits every task), and a progress
-reporter that shows running counters on a TTY and flat, parseable log lines
-otherwise. Stdlib only and no corpus knowledge — callers pass async task
-functions, so this module is unit-testable in isolation.
+The runtime provides named phases, a bounded-parallel fan-out (a barrier — it
+awaits every task), and a progress reporter that shows running counters on a
+TTY and flat, parseable log lines otherwise. Stdlib only and no corpus
+knowledge — callers pass async task functions, so this module is unit-testable
+in isolation.
 """
 from __future__ import annotations
 

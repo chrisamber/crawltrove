@@ -2,8 +2,8 @@
 
 `POST /api/research` runs an autonomous **plan → search → read → assess →
 synthesize** loop and produces a cited Markdown report. This document is the
-spec that `CLAUDE.md` and `app/research.py` reference: Phase 1 is the loop;
-Phase 2 (checkpoint/resume) makes in-flight runs survive restarts.
+spec implemented by `app/research.py`: Phase 1 is the loop; Phase 2
+(checkpoint/resume) makes in-flight runs survive restarts.
 
 ## Phase 1 — the loop
 
