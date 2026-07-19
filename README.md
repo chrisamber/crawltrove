@@ -210,6 +210,15 @@ python3.11 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
+The App Router dashboard lives in `apps/app/`. Docker builds its static export
+automatically. For frontend-only development, keep FastAPI on port 8000 and run:
+
+```bash
+cd apps/app
+pnpm install
+NEXT_PUBLIC_API_URL=http://localhost:8000 pnpm dev
+```
+
 Database-backed tests automatically skip when local Postgres is unavailable.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and
 [SECURITY.md](SECURITY.md) for private vulnerability reporting.

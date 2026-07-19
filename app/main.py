@@ -1038,9 +1038,12 @@ td{{padding:12px 10px;border-bottom:1px solid #232733;vertical-align:top;font-si
 # Serve dashboard index.html at root
 @app.get("/")
 async def serve_dashboard():
-    dashboard_path = "app/static/index.html"
-    if os.path.exists(dashboard_path):
-        return FileResponse(dashboard_path)
+    for dashboard_path in (
+        "app/static/dashboard/index.html",
+        "app/static/index.html",
+    ):
+        if os.path.exists(dashboard_path):
+            return FileResponse(dashboard_path)
     return {"message": "Web scraper server running. Put index.html in app/static/ directory."}
 
 # Mount static directory for JS/CSS files
