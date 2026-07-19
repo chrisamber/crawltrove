@@ -23,6 +23,8 @@ class CrawlTroveClient:
         user = os.environ.get("CRAWLTROVE_USER")
         password = os.environ.get("CRAWLTROVE_PASSWORD")
         self.auth = (user, password) if user and password else None
+        api_key = os.environ.get("CRAWLTROVE_API_KEY")
+        self.headers = {"X-API-Key": api_key} if api_key else None
         self.transport = transport
 
     def _request(self, method: str, path: str, *, json: Any = None,
@@ -31,6 +33,7 @@ class CrawlTroveClient:
             "base_url": self.base_url,
             "timeout": self.timeout,
             "auth": self.auth,
+            "headers": self.headers,
         }
         if self.transport is not None:
             kwargs["transport"] = self.transport

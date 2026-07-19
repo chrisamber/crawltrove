@@ -4,6 +4,22 @@ import pytest
 from crawltrove_mcp.client import CrawlTroveClient, CrawlTroveError
 
 
+def test_api_key_is_sent_as_request_header(monkeypatch):
+    monkeypatch.setenv("CRAWLTROVE_API_KEY", "test-key")
+    captured = {}
+
+    def handler(request):
+        captured["api_key"] = request.headers.get("x-api-key")
+        return httpx.Response(200, json={"results": [], "count": 0})
+
+    client = CrawlTroveClient(
+        base_url="http://service", transport=httpx.MockTransport(handler))
+
+    client.search("actors")
+
+    assert captured["api_key"] == "test-key"
+
+
 def test_search_forwards_filters_to_hybrid_endpoint():
     captured = {}
 

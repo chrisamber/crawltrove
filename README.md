@@ -104,10 +104,11 @@ CRAWLTROVE_BASE_URL=http://localhost:8000 .venv/bin/python -m crawltrove_mcp
 ```
 
 Register that command in your MCP client with the repository as its working
-directory. Set `CRAWLTROVE_USER` and `CRAWLTROVE_PASSWORD` when the service uses
-Basic authentication. The adapter exposes `scrape`, `search_web`, `search`,
-`start_crawl`, and `get_crawl`; crawl bodies stay in CrawlTrove so polling does
-not flood the model context.
+directory. Set `CRAWLTROVE_API_KEY` when the service uses `API_KEYS`, or set
+`CRAWLTROVE_USER` and `CRAWLTROVE_PASSWORD` when it uses Basic authentication.
+The adapter exposes `scrape`, `search_web`, `search`, `start_crawl`, and
+`get_crawl`; crawl bodies stay in CrawlTrove so polling does not flood the model
+context.
 
 ## What it extracts
 
