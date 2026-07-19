@@ -8,6 +8,7 @@ def test_launch_kwargs_default(monkeypatch):
     kwargs = scraper._launch_kwargs()
     assert kwargs["headless"] is True
     assert kwargs["chromium_sandbox"] is True
+    assert "--disable-dev-shm-usage" in kwargs["args"]
     assert "--no-sandbox" not in kwargs["args"]
     assert "--disable-setuid-sandbox" not in kwargs["args"]
     assert "executable_path" not in kwargs

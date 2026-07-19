@@ -49,11 +49,12 @@ async def fetch_http(url: str, timeout_s: int = 20) -> Optional[Dict[str, Any]]:
                     try:
                         ipaddress.ip_address(host)
                     except ValueError:
+                        pinned = ",".join(
+                            f"[{address}]" if ":" in address else address
+                            for address in addresses
+                        )
                         session.curl_options = {
-                            CurlOpt.RESOLVE: [
-                                f"{host}:{port}:{'[' + address + ']' if ':' in address else address}"
-                                for address in addresses
-                            ]
+                            CurlOpt.RESOLVE: [f"{host}:{port}:{pinned}"]
                         }
                     else:
                         # Literal IPs are already pinned by the URL itself, and
