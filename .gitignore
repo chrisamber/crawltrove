@@ -27,6 +27,7 @@ data/metadata/
 scrapes/
 
 # Local development metadata
+AGENTS.md
 .agents/
 .codex/
 .superpowers/
