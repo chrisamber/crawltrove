@@ -11,6 +11,8 @@ changing the API or stored data.
   requires, and enable `no-new-privileges`.
 - Run the application code baked into the container image instead of replacing
   it with a host source bind mount.
+- Pin mixed IPv4/IPv6 DNS answers using curl's valid combined resolve entry so
+  the HTTP fetch tier can reach either verified public address.
 
 ## Upgrade notes
 

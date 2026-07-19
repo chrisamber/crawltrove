@@ -77,7 +77,7 @@ async def test_private_network_opt_in_is_explicit(monkeypatch):
     await url_safety.ensure_public_url("http://127.0.0.1")
 
 
-async def test_http_redirect_is_revalidated(monkeypatch):
+async def test_http_redirect_is_revalidated_and_addresses_share_resolve_entry(monkeypatch):
     class Response:
         status_code = 302
         headers = {"location": "http://127.0.0.1/admin"}
@@ -111,7 +111,7 @@ async def test_http_redirect_is_revalidated(monkeypatch):
         checked.append(url)
         if "127.0.0.1" in url:
             raise url_safety.UnsafeUrlError("private")
-        return ("93.184.216.34",)
+        return ("93.184.216.34", "2001:4860:4860::8888")
 
     monkeypatch.setattr(fetch, "AsyncSession", Session)
     monkeypatch.setattr(fetch, "ensure_public_url", validate)
@@ -122,7 +122,7 @@ async def test_http_redirect_is_revalidated(monkeypatch):
     assert Session.last.kwargs["trust_env"] is False
     assert Session.last.get_kwargs == [{"timeout": 20, "allow_redirects": False}]
     assert Session.last.curl_options[CurlOpt.RESOLVE] == [
-        "public.example:443:93.184.216.34"
+        "public.example:443:93.184.216.34,[2001:4860:4860::8888]"
     ]
 
 
