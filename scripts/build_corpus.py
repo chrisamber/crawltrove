@@ -91,8 +91,8 @@ def records_from_crawl(artifact_path, source: str, scraped_at: str = "",
 
 
 def chunk_records(page_rec: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Explode a page record into one record per structure-aware chunk (Epic 3
-    S2). Each chunk gets its own content_hash/id, a parent_hash pointing at the
+    """Explode a page record into one record per structure-aware chunk. Each
+    chunk gets its own content_hash/id, a parent_hash pointing at the
     page, a chunk_index, and a heading-path breadcrumb; all other metadata is
     inherited. A page that chunks to nothing degrades to a single whole-page
     chunk so no content is lost."""
@@ -130,7 +130,7 @@ def write_records(records: List[Dict[str, Any]], base, source: str,
 
     Normal (incremental) mode uses the append-only content-hash ledger to skip
     already-seen records and records provenance for new ones. The rebuild path
-    (Epic 3 S6) overrides:
+    The rebuild path overrides:
       * ``corpus_dir`` — write corpus/<target>/... under this root instead of
         ``base/corpus`` (so a rebuild can stage into data/corpus.new/), while
         metadata ledgers stay under ``base/metadata``.

@@ -1,4 +1,4 @@
-"""Persistence foundation tests (Epic 1).
+"""Persistence foundation tests.
 
 Two guarantees:
   1. With DATABASE_URL unset every repo call is a silent no-op (legacy behaviour).

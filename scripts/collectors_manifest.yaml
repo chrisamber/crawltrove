@@ -1,4 +1,4 @@
-# Epic 3 S5 collector batches. These four sources write standard crawl
+# These collector batches write standard crawl
 # artifacts to data/crawls/ (via app.corpus.crawl_shape); feed each into
 # scripts/build_corpus.py --from-crawl <artifact> --source <source>.
 #

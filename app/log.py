@@ -1,4 +1,4 @@
-"""Structured stdlib logging for the service (Epic 2, E2.S3).
+"""Structured stdlib logging for the service.
 
 One configure_logging() call at startup replaces the ad-hoc print() statements
 that used to scatter across the app. The whole codebase already logs through

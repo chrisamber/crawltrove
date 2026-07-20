@@ -1,7 +1,7 @@
-"""Unit tests for app/normalize.py (Epic 2 — consolidated row mappers).
+"""Unit tests for the consolidated row mappers in app/normalize.py.
 
 Pure functions, no DB. They lift the URL normalization + page-row mapping that
-Epic 1 inlined across runner.py / crawler.py into one place, and add the
+were inlined across runner.py and crawler.py, and add the
 extract->records mapping. Every function must be total: never raise, even on
 junk input.
 """

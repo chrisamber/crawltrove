@@ -1,4 +1,4 @@
-"""Epic 2 — export (streamed CSV/JSON), records listing, and Postgres FTS search.
+"""Tests for export, records listing, and Postgres full-text search.
 
 DB-path tests (skip cleanly without a local Postgres). They seed pages directly
 through the repo, then exercise the repo search + the export/search/records REST

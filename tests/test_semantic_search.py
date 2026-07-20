@@ -1,4 +1,4 @@
-"""API tests for GET /api/search/semantic (Epic 3 S1).
+"""API tests for GET /api/search/semantic.
 
 Hermetic: embeddings + vecindex are mocked, so no network and no real index.
 Exercises the 501-when-unconfigured contract, argument validation, and the

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backfill / reindex the semantic vector index (Epic 3 S1).
+"""Backfill / reindex the semantic vector index.
 
 Walks the file artifacts the system produces and indexes them into
 ``data/index/vectors.db`` via ``app.vecindex``:

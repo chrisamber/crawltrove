@@ -1,4 +1,4 @@
-"""Tests for the service-side corpus browser (Epic 3 S4).
+"""Tests for the service-side corpus browser.
 
 Reads data/corpus/**/*.jsonl generically. Hermetic: a tmp corpus tree is built
 and CORPUS_DIR is pointed at it; the API is driven over ASGI (no network).

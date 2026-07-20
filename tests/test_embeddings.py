@@ -1,4 +1,4 @@
-"""Unit tests for the embeddings client (Epic 3 S1).
+"""Unit tests for the embeddings client.
 
 Hermetic: the HTTP client is faked, so no network. Exercises configuration
 gating, internal batching, and the swallow-and-default contract (any failure →

@@ -67,7 +67,7 @@ if CORS_ORIGINS:
 async def unsafe_url_handler(_request: Request, exc: UnsafeUrlError):
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
-# Optional auth gate (Epic 3 S7). Two credentials, either sufficient:
+# Optional auth gate. Two credentials, either sufficient:
 #   * HTTP Basic Auth via APP_USERNAME/APP_PASSWORD (browser dashboard).
 #   * X-API-Key via API_KEYS (comma-separated) for programmatic clients.
 # The gate is enabled only when at least one is configured (local/dev stays

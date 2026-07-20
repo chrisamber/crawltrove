@@ -1,4 +1,4 @@
-"""Service-side browser over the offline corpus (Epic 3 S4).
+"""Service-side browser over the offline corpus.
 
 Reads ``data/corpus/**/*.jsonl`` **generically** — it must NOT import
 ``app.corpus`` (the one-way dependency: the service never depends on the corpus
@@ -8,7 +8,7 @@ the corpus *target* (rag/sft/dapt) comes from the file's path.
 
 The list endpoint streams files and stops once it has a page, so a large JSONL
 tree is never fully loaded. ``stats()`` scans once and caches by the tree's file
-signature (paths + mtimes), matching the epic's "cache stats" note.
+signature (paths + mtimes), so unchanged trees reuse the cached result.
 """
 import json
 import os

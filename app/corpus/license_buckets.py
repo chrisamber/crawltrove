@@ -14,7 +14,7 @@ ALL_BUCKETS = {
     "swift-org-permissive",
     "cc-by-4.0",
     "cc0-1.0",
-    # Epic 3 S5 new sources:
+    # Additional corpus sources:
     "permissive",                 # MIT/Apache/BSD/ISC code + docs (RAG + DAPT)
     "community-review-required",  # forums / unconfirmed tutorials & repos (RAG only)
     "own-content",
@@ -28,7 +28,7 @@ SOURCE_BUCKET = {
     "swift-evolution": "swift-org-permissive",
     "swift-book": "cc-by-4.0",
     "own": "own-content",
-    # Epic 3 S5 collectors. swift.org is Apache-2.0 (permissive). Forums are
+    # Collector sources. swift.org is Apache-2.0 (permissive). Forums are
     # user-contributed → conservative RAG-only. Tutorials/GitHub are tagged by
     # the collector with a license-specific source id (see the helpers below);
     # the bare ids are the conservative fallback when the license is unconfirmed.

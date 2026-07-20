@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Collect Swift Forums threads via the Discourse JSON API (Epic 3 S5).
+"""Collect Swift Forums threads via the Discourse JSON API.
 
 forums.swift.org is a Discourse instance: every page has a `.json` twin. We list
 a category's topics (`/c/<slug>/<id>.json`), fetch each topic
 (`/t/<id>.json`), and render the thread to Markdown — original question first,
 the accepted answer flagged. Accepted-answer threads are prioritized (they're
-the most SFT-shaped); the S3 quality tiering does the noise control downstream.
+the most SFT-shaped); quality tiering does the noise control downstream.
 
 Forum posts are user-contributed, so the source is routed conservatively
 (community-review-required → RAG-only) in license_buckets.py.

@@ -412,7 +412,7 @@ class WebCrawler:
         """Standardize URLs to avoid crawling identical pages.
 
         Delegates to app.normalize so the crawl frontier and the persistence
-        layer share one definition of URL identity (Epic 2 consolidation).
+        layer share one definition of URL identity.
         """
         return normalize.normalize_url(url)
 

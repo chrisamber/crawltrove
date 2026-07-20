@@ -1,4 +1,4 @@
-"""Text embedding client for the semantic-search layer (Epic 3 S1).
+"""Text embedding client for the semantic-search layer.
 
 Mirrors the ``extract_llm`` backend contract: a single local OpenAI-compatible
 ``/v1/embeddings`` endpoint, selected via ``EMBEDDINGS_BASE_URL`` +

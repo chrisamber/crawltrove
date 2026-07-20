@@ -1,7 +1,7 @@
 """End-to-end wiring tests through the real FastAPI app (no network).
 
 The scraper, dedup index, and file storage are mocked so these stay hermetic and
-fast; what they exercise is the *wiring* added by Epic 1: the scrape path's DB
+fast; what they exercise is the scrape path's DB
 recording, the jobs/runs REST API, and the background job runner.
 """
 import asyncio

@@ -43,7 +43,7 @@ def _content_hashes(base):
 
 
 def _expected_hashes(bids):
-    """Ledger hashes after S2: DAPT keeps the whole-page hash, RAG records one
+    """Ledger hashes after chunking: DAPT keeps the whole-page hash, RAG records one
     hash per structure-aware chunk. swift-book routes to {rag, dapt}."""
     exp = set()
     for bid in bids:

@@ -1,4 +1,4 @@
-"""Tests for quality tiering + tier-aware routing (Epic 3 S3)."""
+"""Tests for quality tiering and tier-aware routing."""
 from app.corpus import quality_tiers as qt
 from app.corpus import router
 

@@ -1,4 +1,4 @@
-"""Shared helpers for the Epic 3 S5 corpus collectors.
+"""Shared helpers for the corpus collectors.
 
 Each collector discovers pages, turns them into the standard crawl-artifact
 shape (via app.corpus.crawl_shape), and writes them to data/crawls/ so

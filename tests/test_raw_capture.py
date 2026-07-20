@@ -1,4 +1,4 @@
-"""Epic 2 — raw capture (status_code, raw HTML, screenshot) + retention.
+"""Tests for raw capture and retention.
 
 All hermetic: scraper._build_result runs the real signal pipeline on a static
 HTML string (no network); storage functions run against a tmp DATA_DIR. The DB

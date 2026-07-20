@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Collect permissively-licensed Swift tutorial pages from a curated allowlist
-(Epic 3 S5).
+"""Collect permissively-licensed Swift tutorial pages from a curated allowlist.
 
 Reads scripts/tutorials_allowlist.yaml — each entry asserts a root + its content
 license. For every root we scrape pages through the service waterfall and

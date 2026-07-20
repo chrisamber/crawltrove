@@ -1,4 +1,4 @@
-"""Tests for the sqlite-vec semantic index (Epic 3 S1).
+"""Tests for the sqlite-vec semantic index.
 
 Uses a real sqlite-vec database in a tmp dir (the extension is a hard dep). The
 chunker is a pure function. index_document is exercised with a fake embedding

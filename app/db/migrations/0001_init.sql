@@ -1,4 +1,4 @@
--- 0001_init.sql — persistence foundation (Epic 1).
+-- 0001_init.sql — persistence foundation.
 --
 -- Every statement is idempotent (IF NOT EXISTS) so the migration is safe to
 -- re-apply after restarts or interrupted deployments, even though

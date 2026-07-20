@@ -1,4 +1,4 @@
-# Curated allowlist of permissively-licensed Swift tutorial sources (Epic 3 S5).
+# Curated allowlist of permissively-licensed Swift tutorial sources.
 # Each entry asserts the site's content license; the collector confirms it
 # per-page with license_detect before routing to a permissive bucket, and drops
 # any page whose detected license conflicts with the asserted one.

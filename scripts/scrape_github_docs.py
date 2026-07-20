@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Collect README/docs trees of major Swift packages via the GitHub API (Epic 3
-S5).
+"""Collect README/docs trees of major Swift packages via the GitHub API.
 
 For each repo we read its LICENSE (SPDX id) and let that drive the corpus bucket
 (license_buckets.source_id_for_repo_license): a permissive license (MIT/Apache/

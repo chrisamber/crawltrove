@@ -1,4 +1,4 @@
-"""Structure-aware Markdown chunking for the corpus pipeline (Epic 3 S2).
+"""Structure-aware Markdown chunking for the corpus pipeline.
 
 Splits a page's Markdown on its heading hierarchy, **never splitting inside a
 fenced code block**, and packs the resulting blocks into a target token window

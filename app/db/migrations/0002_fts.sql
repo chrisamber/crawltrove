@@ -1,4 +1,4 @@
--- 0002_fts.sql — full-text search over scraped pages (Epic 2, E2.S2).
+-- 0002_fts.sql — full-text search over scraped pages.
 --
 -- A STORED generated tsvector column kept in lock-step with the row by Postgres
 -- (no triggers to maintain), indexed with GIN. The 2-arg to_tsvector('english',

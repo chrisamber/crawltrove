@@ -1,6 +1,7 @@
 # Python
 venv/
 __pycache__/
+.pytest_cache/
 *.pyc
 *.pyo
 .Python
@@ -22,6 +23,7 @@ env/
 # CI deploy marker
 .last-deploy
 data/
+tmp/
 data/corpus/
 data/metadata/
 scrapes/
