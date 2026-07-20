@@ -74,6 +74,7 @@ export function AppShell({
                   key={item.id}
                   type="button"
                   onClick={() => onViewChange(item.id)}
+                  aria-label={item.label}
                   aria-current={active ? "page" : undefined}
                   className={cn(
                     "relative flex h-8 w-full items-center rounded-[6px] text-xs font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-indigo-400/60 disabled:pointer-events-none disabled:opacity-50",
@@ -106,7 +107,7 @@ export function AppShell({
             )}
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button variant="ghost" size={collapsed ? "icon-sm" : "sm"} className={cn("text-zinc-600 hover:text-zinc-200", !collapsed && "w-full justify-start")} onClick={() => updateCollapsed(!collapsed)}>
+                <Button aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} variant="ghost" size={collapsed ? "icon-sm" : "sm"} className={cn("text-zinc-600 hover:text-zinc-200", !collapsed && "w-full justify-start")} onClick={() => updateCollapsed(!collapsed)}>
                   {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
                   {!collapsed && "Collapse"}
                 </Button>
@@ -154,7 +155,7 @@ export function AppShell({
             {navigation.map((item) => {
               const Icon = item.icon;
               return (
-                <button key={item.id} type="button" onClick={() => onViewChange(item.id)} className={cn("flex items-center justify-center gap-1.5 rounded-[6px] text-[11px] text-zinc-600 outline-none hover:bg-white/[0.04] focus-visible:ring-2 focus-visible:ring-indigo-400/60", activeView === item.id && "bg-white/[0.06] text-zinc-100")}>
+                <button key={item.id} type="button" onClick={() => onViewChange(item.id)} aria-current={activeView === item.id ? "page" : undefined} className={cn("flex items-center justify-center gap-1.5 rounded-[6px] text-[11px] text-zinc-600 outline-none hover:bg-white/[0.04] focus-visible:ring-2 focus-visible:ring-indigo-400/60", activeView === item.id && "bg-white/[0.06] text-zinc-100")}>
                   <Icon className="size-3.5" />{item.label}
                 </button>
               );

@@ -99,8 +99,11 @@ export type ScrapeResult = {
 };
 
 export class ApiError extends Error {
-  constructor(message: string, public status: number) {
+  status: number;
+
+  constructor(message: string, status: number) {
     super(message);
+    this.status = status;
   }
 }
 
@@ -126,7 +129,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function formatDate(value?: string | number | null) {
-  if (!value) return "—";
+  if (value === undefined || value === null || value === "") return "—";
   const date = typeof value === "number" ? new Date(value * 1000) : new Date(value);
   return Number.isNaN(date.valueOf())
     ? "—"

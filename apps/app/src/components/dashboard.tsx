@@ -27,6 +27,7 @@ import {
   type TimelineStep,
 } from "@/components/system";
 import {
+  ApiError,
   api,
   formatBytes,
   formatDate,
@@ -38,9 +39,36 @@ import {
   type Run,
   type ScrapeResult,
 } from "@/lib/api";
+import { useLatestRequest } from "@/hooks/use-latest-request";
+import { isAbortError, isTerminalCrawlStatus, normalizePageLimit } from "@/lib/request-safety";
 import { cn } from "@/lib/utils";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
+const ACTIVE_CRAWL_KEY = "crawltrove.active-crawl";
+
+function readActiveCrawl() {
+  try {
+    return window.sessionStorage.getItem(ACTIVE_CRAWL_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function rememberActiveCrawl(jobId: string) {
+  try {
+    window.sessionStorage.setItem(ACTIVE_CRAWL_KEY, jobId);
+  } catch {
+    // Storage is a recovery aid; a queued backend job remains valid without it.
+  }
+}
+
+function forgetActiveCrawl() {
+  try {
+    window.sessionStorage.removeItem(ACTIVE_CRAWL_KEY);
+  } catch {
+    // Ignore storage restrictions while keeping the live UI state accurate.
+  }
+}
 
 function messageOf(error: unknown) {
   return error instanceof Error ? error.message : "An unexpected error occurred.";
@@ -63,16 +91,37 @@ export function Dashboard() {
   }, []);
 
   React.useEffect(() => {
-    let active = true;
-    const loadHealth = () => api<Health>("/api/health").then((value) => active && setHealth(value)).catch(() => active && setHealth(null));
-    loadHealth();
-    const timer = window.setInterval(loadHealth, 30_000);
-    return () => { active = false; window.clearInterval(timer); };
+    let stopped = false;
+    let timer: number | undefined;
+    let controller: AbortController | undefined;
+
+    const loadHealth = async () => {
+      controller = new AbortController();
+      try {
+        const value = await api<Health>("/api/health", {
+          signal: controller.signal,
+        });
+        if (!stopped) setHealth(value);
+      } catch (healthError) {
+        if (!stopped && !isAbortError(healthError)) setHealth(null);
+      } finally {
+        if (!stopped) timer = window.setTimeout(loadHealth, 30_000);
+      }
+    };
+
+    void loadHealth();
+    return () => {
+      stopped = true;
+      controller?.abort();
+      if (timer) window.clearTimeout(timer);
+    };
   }, []);
 
   return (
     <AppShell activeView={view} onViewChange={setView} health={health} commandOpen={commandOpen} onCommandOpenChange={setCommandOpen}>
-      {view === "crawl" && <CrawlWorkspace />}
+      <div className={cn("h-full", view !== "crawl" && "hidden")}>
+        <CrawlWorkspace active={view === "crawl"} />
+      </div>
       {view === "runs" && <RunsWorkspace onStartCrawl={() => setView("crawl")} />}
       {view === "documents" && <DocumentsWorkspace onStartCrawl={() => setView("crawl")} />}
       {view === "corpus" && <CorpusWorkspace />}
@@ -81,7 +130,7 @@ export function Dashboard() {
   );
 }
 
-function CrawlWorkspace() {
+function CrawlWorkspace({ active }: { active: boolean }) {
   const [mode, setMode] = React.useState<"crawl" | "scrape">("crawl");
   const [url, setUrl] = React.useState("");
   const [engine, setEngine] = React.useState("auto");
@@ -91,58 +140,113 @@ function CrawlWorkspace() {
   const [jobId, setJobId] = React.useState<string | null>(null);
   const [scrape, setScrape] = React.useState<ScrapeResult | null>(null);
   const [error, setError] = React.useState<string | null>(null);
+  const [inspectorDismissed, setInspectorDismissed] = React.useState(false);
+  const [pollRevision, setPollRevision] = React.useState(0);
+  const [startSubmitRequest] = useLatestRequest();
+
+  React.useEffect(() => {
+    const activeJobId = readActiveCrawl();
+    if (!activeJobId) return;
+    setJob({ status: "queued", progress: 0, jobId: activeJobId });
+    setJobId(activeJobId);
+    setBusy(true);
+  }, []);
 
   React.useEffect(() => {
     if (!jobId) return;
     let stopped = false;
+    let timer: number | undefined;
+    let controller: AbortController | undefined;
+
     const poll = async () => {
+      let continuePolling = true;
+      controller = new AbortController();
       try {
-        const next = await api<CrawlJob>(`/api/crawl/${jobId}`);
+        const next = await api<CrawlJob>(`/api/crawl/${jobId}`, {
+          signal: controller.signal,
+        });
         if (stopped) return;
         setJob(next);
-        if (["completed", "failed", "cancelled"].includes(next.status)) {
+        if (isTerminalCrawlStatus(next.status)) {
+          continuePolling = false;
+          forgetActiveCrawl();
           setBusy(false);
           setJobId(null);
-          toast[next.status === "completed" ? "success" : "error"](next.status === "completed" ? "Crawl completed" : `Crawl ${next.status}`);
+          if (next.status === "completed") toast.success("Crawl completed");
+          else if (next.status === "interrupted") toast.warning("Crawl interrupted");
+          else toast.error(`Crawl ${next.status}`);
         }
       } catch (pollError) {
+        if (isAbortError(pollError)) return;
+        continuePolling = false;
         if (!stopped) {
-          setBusy(false);
-          setJobId(null);
+          if (pollError instanceof ApiError && pollError.status === 404) {
+            forgetActiveCrawl();
+            setBusy(false);
+            setJobId(null);
+          } else {
+            setBusy(true);
+          }
           setError(messageOf(pollError));
+          toast.error("Crawl status unavailable");
+        }
+      } finally {
+        if (!stopped && continuePolling) {
+          timer = window.setTimeout(poll, 1_500);
         }
       }
     };
-    poll();
-    const timer = window.setInterval(poll, 1_500);
-    return () => { stopped = true; window.clearInterval(timer); };
-  }, [jobId]);
+
+    void poll();
+    return () => {
+      stopped = true;
+      controller?.abort();
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [jobId, pollRevision]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    const targetUrl = url.trim();
+    if (!targetUrl) {
+      setError("Enter a target URL before starting.");
+      toast.error("Target URL is required");
+      return;
+    }
+
+    const controller = startSubmitRequest();
+    const pageLimit = normalizePageLimit(limit);
     setError(null);
     setScrape(null);
     setJob(null);
+    setInspectorDismissed(false);
     setBusy(true);
+    if (mode === "crawl") setLimit(pageLimit);
     try {
       if (mode === "scrape") {
         const result = await api<ScrapeResult>("/api/scrape", {
           method: "POST",
-          body: JSON.stringify({ url, engine, onlyMainContent: true, waitForMs: 1000 }),
+          body: JSON.stringify({ url: targetUrl, engine, onlyMainContent: true, waitForMs: 1000 }),
+          signal: controller.signal,
         });
+        if (controller.signal.aborted) return;
         setScrape(result);
         setBusy(false);
         toast.success("Page scraped");
       } else {
         const result = await api<{ jobId: string }>("/api/crawl", {
           method: "POST",
-          body: JSON.stringify({ url, engine, limit, maxDepth: 2, onlyMainContent: true, useSitemap: true, screenshots: false }),
+          body: JSON.stringify({ url: targetUrl, engine, limit: pageLimit, maxDepth: 2, onlyMainContent: true, useSitemap: true, screenshots: false }),
+          signal: controller.signal,
         });
+        if (controller.signal.aborted) return;
+        rememberActiveCrawl(result.jobId);
         setJob({ status: "queued", progress: 0, jobId: result.jobId });
         setJobId(result.jobId);
         toast.success("Crawl queued");
       }
     } catch (submitError) {
+      if (isAbortError(submitError)) return;
       setBusy(false);
       setError(messageOf(submitError));
       toast.error(mode === "crawl" ? "Crawl could not start" : "Scrape failed");
@@ -151,19 +255,24 @@ function CrawlWorkspace() {
 
   const progress = normalizeProgress(job?.progress);
   const timeline = crawlTimeline(job?.status ?? "queued", progress);
-  const inspectorOpen = Boolean(job || scrape || error);
+  const inspectorOpen = Boolean(job || scrape || error) && !inspectorDismissed;
   const title = scrape?.title || scrape?.url || job?.base_url || url || "Current operation";
+  const retryPolling = () => {
+    setError(null);
+    setBusy(true);
+    setPollRevision((revision) => revision + 1);
+  };
 
   return (
     <Workspace>
-      <PageHeader section="Acquire" title="Crawl" description="Capture one page or follow a bounded site frontier." actions={<StatusBadge status={busy ? "running" : "ready"} tone={busy ? "info" : "neutral"} />} />
+      <PageHeader section="Acquire" title="Crawl" description="Capture one page or follow a bounded site frontier." actions={<>{inspectorDismissed && (job || scrape || error) ? <Button variant="outline" size="sm" onClick={() => setInspectorDismissed(false)}>View result</Button> : null}<StatusBadge status={error && jobId ? "unknown" : busy ? "running" : "ready"} tone={error && jobId ? "warning" : busy ? "info" : "neutral"} /></>} />
       <InspectorPanel
-        open={inspectorOpen}
-        onClose={() => { setJob(null); setScrape(null); setError(null); }}
+        open={active && inspectorOpen}
+        onClose={() => setInspectorDismissed(true)}
         inspector={
           <InspectorContent>
-            <InspectorHeader eyebrow={scrape ? "Scrape result" : job ? "Crawl run" : "Request error"} title={title} onClose={() => { setJob(null); setScrape(null); setError(null); }} />
-            {error ? <ErrorState title="Request failed" description={error} /> : scrape ? (
+            <InspectorHeader eyebrow={scrape ? "Scrape result" : job ? "Crawl run" : "Request error"} title={title} onClose={() => setInspectorDismissed(true)} />
+            {error ? <ErrorState title="Request failed" description={error} onRetry={jobId ? retryPolling : undefined} /> : scrape ? (
               <>
                 <KeyValueList items={[
                   { label: "URL", value: scrape.url },
@@ -219,9 +328,9 @@ function CrawlWorkspace() {
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label className="text-xs text-zinc-400">Fetch engine</Label>
+                    <Label htmlFor="fetch-engine" className="text-xs text-zinc-400">Fetch engine</Label>
                     <Select value={engine} onValueChange={setEngine} disabled={busy}>
-                      <SelectTrigger className="h-8 w-full border-white/10 bg-[#090a0c] text-xs"><SelectValue /></SelectTrigger>
+                      <SelectTrigger id="fetch-engine" className="h-8 w-full border-white/10 bg-[#090a0c] text-xs"><SelectValue /></SelectTrigger>
                       <SelectContent><SelectItem value="auto">Auto · HTTP then browser</SelectItem><SelectItem value="http">HTTP only</SelectItem><SelectItem value="browser">Browser only</SelectItem></SelectContent>
                     </Select>
                   </div>
@@ -233,7 +342,7 @@ function CrawlWorkspace() {
               </div>
               <div className="flex items-center justify-between border-t border-white/[0.08] bg-white/[0.015] px-4 py-3 sm:px-5">
                 <span className="text-[11px] text-zinc-700">Sitemap discovery · max depth 2 · main content</span>
-                <Button type="submit" disabled={busy || !url} className="h-9 min-w-28 bg-zinc-100 text-zinc-950 hover:bg-white active:bg-zinc-300">
+                <Button type="submit" disabled={busy || !url.trim()} className="h-9 min-w-28 bg-zinc-100 text-zinc-950 hover:bg-white active:bg-zinc-300">
                   {busy ? <LoaderCircle className="animate-spin" /> : mode === "crawl" ? <Waypoints /> : <Sparkles />}
                   {busy ? "Working…" : mode === "crawl" ? "Start crawl" : "Scrape page"}
                 </Button>
@@ -261,29 +370,46 @@ function RunsWorkspace({ onStartCrawl }: { onStartCrawl: () => void }) {
   const [selected, setSelected] = React.useState<Run | null>(null);
   const [query, setQuery] = React.useState("");
   const [status, setStatus] = React.useState("all");
+  const [startLoadRequest] = useLatestRequest();
+  const [startDetailRequest, cancelDetailRequest] = useLatestRequest();
 
   const load = React.useCallback(async () => {
+    const controller = startLoadRequest();
     setState("loading");
+    setError("");
     try {
       const params = status === "all" ? "" : `?status=${encodeURIComponent(status)}`;
-      const response = await api<{ runs: Run[] }>(`/api/runs${params}`);
+      const response = await api<{ runs: Run[] }>(`/api/runs${params}`, {
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
       setRuns(response.runs);
       setState("ready");
     } catch (loadError) {
+      if (isAbortError(loadError)) return;
       setError(messageOf(loadError));
       setState("error");
     }
-  }, [status]);
+  }, [startLoadRequest, status]);
 
-  React.useEffect(() => { load(); }, [load]);
+  React.useEffect(() => { void load(); }, [load]);
 
   const select = async (run: Run) => {
+    const controller = startDetailRequest();
     setSelected(run);
     try {
-      setSelected(await api<Run>(`/api/runs/${run.id}`));
+      const detail = await api<Run>(`/api/runs/${run.id}`, {
+        signal: controller.signal,
+      });
+      if (!controller.signal.aborted) setSelected(detail);
     } catch (detailError) {
+      if (isAbortError(detailError)) return;
       toast.error(messageOf(detailError));
     }
+  };
+  const closeInspector = () => {
+    cancelDetailRequest();
+    setSelected(null);
   };
   const filtered = runs.filter((run) => [run.externalId, run.status, run.engineUsed, run.id].some((value) => String(value ?? "").toLowerCase().includes(query.toLowerCase())));
   const columns: DataColumn<Run>[] = [
@@ -297,15 +423,15 @@ function RunsWorkspace({ onStartCrawl }: { onStartCrawl: () => void }) {
 
   return (
     <Workspace>
-      <PageHeader section="Observe" title="Runs" description="Inspect persisted scrape and crawl executions." actions={<><Button variant="outline" size="sm" onClick={load} disabled={state === "loading"}><RefreshCw className={cn(state === "loading" && "animate-spin")} />Refresh</Button><Button size="sm" className="bg-zinc-100 text-zinc-950 hover:bg-white" onClick={onStartCrawl}><Waypoints />New crawl</Button></>} />
-      <InspectorPanel open={Boolean(selected)} onClose={() => setSelected(null)} inspector={selected ? <RunInspector run={selected} onClose={() => setSelected(null)} /> : null}>
+      <PageHeader section="Observe" title="Runs" description="Inspect persisted scrape and crawl executions." actions={<><Button variant="outline" size="sm" onClick={() => void load()} disabled={state === "loading"}><RefreshCw className={cn(state === "loading" && "animate-spin")} />Refresh</Button><Button size="sm" className="bg-zinc-100 text-zinc-950 hover:bg-white" onClick={onStartCrawl}><Waypoints />New crawl</Button></>} />
+      <InspectorPanel open={Boolean(selected)} onClose={closeInspector} inspector={selected ? <RunInspector run={selected} onClose={closeInspector} /> : null}>
         <CollectionContent>
           <FilterBar>
-            <div className="relative min-w-0 flex-1 sm:max-w-xs"><Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-zinc-700" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter runs…" className="h-8 border-white/10 bg-[#0d0e11] pl-8 text-xs" /></div>
-            <Select value={status} onValueChange={setStatus}><SelectTrigger className="h-8 w-32 border-white/10 bg-[#0d0e11] text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All statuses</SelectItem><SelectItem value="completed">Completed</SelectItem><SelectItem value="running">Running</SelectItem><SelectItem value="failed">Failed</SelectItem><SelectItem value="interrupted">Interrupted</SelectItem></SelectContent></Select>
+            <div className="relative min-w-0 flex-1 sm:max-w-xs"><Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-zinc-700" /><Input aria-label="Filter runs" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter runs…" className="h-8 border-white/10 bg-[#0d0e11] pl-8 text-xs" /></div>
+            <Select value={status} onValueChange={setStatus}><SelectTrigger aria-label="Filter by run status" className="h-8 w-32 border-white/10 bg-[#0d0e11] text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All statuses</SelectItem><SelectItem value="completed">Completed</SelectItem><SelectItem value="running">Running</SelectItem><SelectItem value="failed">Failed</SelectItem><SelectItem value="interrupted">Interrupted</SelectItem></SelectContent></Select>
             <span className="ml-auto font-mono text-[10px] text-zinc-700">{filtered.length} runs</span>
           </FilterBar>
-          <div className="p-3 sm:p-4">{state === "loading" ? <SkeletonState /> : state === "error" ? <ErrorState description={error} onRetry={load} /> : <DataTable columns={columns} data={filtered} getRowId={(run) => run.id} selectedId={selected?.id} onRowSelect={select} empty={<EmptyState title="No runs found" description={query || status !== "all" ? "Change the filters to see more runs." : "Start a crawl to create the first persisted run."} action={<Button size="sm" onClick={onStartCrawl}><Waypoints />Start crawl</Button>} />} />}</div>
+          <div className="p-3 sm:p-4">{state === "loading" ? <SkeletonState /> : state === "error" ? <ErrorState description={error} onRetry={() => void load()} /> : <DataTable columns={columns} data={filtered} getRowId={(run) => run.id} selectedId={selected?.id} onRowSelect={(run) => void select(run)} empty={<EmptyState title="No runs found" description={query || status !== "all" ? "Change the filters to see more runs." : "Start a crawl to create the first persisted run."} action={<Button size="sm" onClick={onStartCrawl}><Waypoints />Start crawl</Button>} />} />}</div>
         </CollectionContent>
       </InspectorPanel>
     </Workspace>
@@ -346,20 +472,69 @@ function DocumentsWorkspace({ onStartCrawl }: { onStartCrawl: () => void }) {
   const [kind, setKind] = React.useState("all");
   const [selected, setSelected] = React.useState<Artifact | null>(null);
   const [payload, setPayload] = React.useState<{ markdown?: string; json?: string }>({});
+  const [payloadState, setPayloadState] = React.useState<LoadState>("idle");
+  const [payloadError, setPayloadError] = React.useState("");
+  const [startLoadRequest] = useLatestRequest();
+  const [startPayloadRequest, cancelPayloadRequest] = useLatestRequest();
 
   const load = React.useCallback(async () => {
+    const controller = startLoadRequest();
     setState("loading");
-    try { const response = await api<{ artifacts: Artifact[] }>("/api/artifacts"); setItems(response.artifacts); setState("ready"); }
-    catch (loadError) { setError(messageOf(loadError)); setState("error"); }
-  }, []);
-  React.useEffect(() => { load(); }, [load]);
+    setError("");
+    try {
+      const response = await api<{ artifacts: Artifact[] }>("/api/artifacts", {
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return;
+      setItems(response.artifacts);
+      setState("ready");
+    } catch (loadError) {
+      if (isAbortError(loadError)) return;
+      setError(messageOf(loadError));
+      setState("error");
+    }
+  }, [startLoadRequest]);
+  React.useEffect(() => { void load(); }, [load]);
 
-  const select = async (artifact: Artifact) => {
-    setSelected(artifact);
+  const loadPayload = React.useCallback(async (artifact: Artifact) => {
+    const controller = startPayloadRequest();
+    setPayloadState("loading");
+    setPayloadError("");
     setPayload({});
-    const read = async (path: string) => { const response = await fetch(path); return response.ok ? response.text() : ""; };
-    const [markdown, json] = await Promise.all([read(artifact.md), read(artifact.json)]);
-    setPayload({ markdown, json: prettyJson(json) });
+
+    const read = async (path: string, label: string) => {
+      const response = await fetch(path, { signal: controller.signal });
+      if (!response.ok) {
+        throw new Error(`Could not load ${label} (${response.status}).`);
+      }
+      return response.text();
+    };
+
+    try {
+      const [markdown, json] = await Promise.all([
+        read(artifact.md, "Markdown"),
+        read(artifact.json, "JSON"),
+      ]);
+      if (controller.signal.aborted) return;
+      setPayload({ markdown, json: prettyJson(json) });
+      setPayloadState("ready");
+    } catch (loadError) {
+      if (isAbortError(loadError)) return;
+      setPayloadError(messageOf(loadError));
+      setPayloadState("error");
+    }
+  }, [startPayloadRequest]);
+
+  const select = (artifact: Artifact) => {
+    setSelected(artifact);
+    void loadPayload(artifact);
+  };
+  const closeInspector = () => {
+    cancelPayloadRequest();
+    setSelected(null);
+    setPayload({});
+    setPayloadState("idle");
+    setPayloadError("");
   };
   const filtered = items.filter((item) => (kind === "all" || item.kind === kind) && `${item.title} ${item.url} ${item.stem}`.toLowerCase().includes(query.toLowerCase()));
   const columns: DataColumn<Artifact>[] = [
@@ -372,11 +547,22 @@ function DocumentsWorkspace({ onStartCrawl }: { onStartCrawl: () => void }) {
 
   return (
     <Workspace>
-      <PageHeader section="Library" title="Documents" description="Read saved Markdown and source artifacts." actions={<><Button variant="outline" size="sm" onClick={load} disabled={state === "loading"}><RefreshCw className={cn(state === "loading" && "animate-spin")} />Refresh</Button><Button size="sm" className="bg-zinc-100 text-zinc-950 hover:bg-white" onClick={onStartCrawl}><Waypoints />Acquire</Button></>} />
-      <InspectorPanel open={Boolean(selected)} onClose={() => setSelected(null)} inspector={selected ? <InspectorContent><InspectorHeader eyebrow={`${selected.kind} artifact`} title={selected.title || selected.stem} onClose={() => setSelected(null)} /><KeyValueList items={[{ label: "Source", value: selected.url }, { label: "Pages", value: selected.pages }, { label: "Size", value: formatBytes(selected.bytes) }, { label: "Captured", value: formatDate(selected.mtime) }]} /><div className="flex gap-2 border-b border-white/[0.08] p-3"><Button asChild variant="outline" size="sm"><a href={selected.md} target="_blank" rel="noreferrer"><Download />Markdown</a></Button><Button asChild variant="outline" size="sm"><a href={selected.json} target="_blank" rel="noreferrer"><FileJson />JSON</a></Button></div>{payload.markdown || payload.json ? <CodeViewer className="flex-1" sources={{ markdown: payload.markdown, json: payload.json }} /> : <SkeletonState />}</InspectorContent> : null}>
+      <PageHeader section="Library" title="Documents" description="Read saved Markdown and source artifacts." actions={<><Button variant="outline" size="sm" onClick={() => void load()} disabled={state === "loading"}><RefreshCw className={cn(state === "loading" && "animate-spin")} />Refresh</Button><Button size="sm" className="bg-zinc-100 text-zinc-950 hover:bg-white" onClick={onStartCrawl}><Waypoints />Acquire</Button></>} />
+      <InspectorPanel
+        open={Boolean(selected)}
+        onClose={closeInspector}
+        inspector={selected ? (
+          <InspectorContent>
+            <InspectorHeader eyebrow={`${selected.kind} artifact`} title={selected.title || selected.stem} onClose={closeInspector} />
+            <KeyValueList items={[{ label: "Source", value: selected.url }, { label: "Pages", value: selected.pages }, { label: "Size", value: formatBytes(selected.bytes) }, { label: "Captured", value: formatDate(selected.mtime) }]} />
+            <div className="flex gap-2 border-b border-white/[0.08] p-3"><Button asChild variant="outline" size="sm"><a href={selected.md} target="_blank" rel="noreferrer"><Download />Markdown</a></Button><Button asChild variant="outline" size="sm"><a href={selected.json} target="_blank" rel="noreferrer"><FileJson />JSON</a></Button></div>
+            {payloadState === "loading" ? <SkeletonState /> : payloadState === "error" ? <ErrorState title="Couldn’t load this document" description={payloadError} onRetry={() => void loadPayload(selected)} /> : payloadState === "ready" ? <CodeViewer className="flex-1" sources={{ markdown: payload.markdown, json: payload.json }} /> : null}
+          </InspectorContent>
+        ) : null}
+      >
         <CollectionContent>
-          <FilterBar><div className="relative min-w-0 flex-1 sm:max-w-xs"><Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-zinc-700" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter documents…" className="h-8 border-white/10 bg-[#0d0e11] pl-8 text-xs" /></div><Select value={kind} onValueChange={setKind}><SelectTrigger className="h-8 w-32 border-white/10 bg-[#0d0e11] text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All kinds</SelectItem><SelectItem value="scrape">Scrapes</SelectItem><SelectItem value="crawl">Crawls</SelectItem><SelectItem value="research">Research</SelectItem></SelectContent></Select><span className="ml-auto font-mono text-[10px] text-zinc-700">{filtered.length} files</span></FilterBar>
-          <div className="p-3 sm:p-4">{state === "loading" ? <SkeletonState /> : state === "error" ? <ErrorState description={error} onRetry={load} /> : <DataTable columns={columns} data={filtered} getRowId={(item) => item.stem} selectedId={selected?.stem} onRowSelect={select} empty={<EmptyState title="No documents found" description={query || kind !== "all" ? "Change the filters to see more documents." : "Scrapes, crawls, and research reports will appear here."} action={<Button size="sm" onClick={onStartCrawl}>Acquire source</Button>} />} />}</div>
+          <FilterBar><div className="relative min-w-0 flex-1 sm:max-w-xs"><Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-zinc-700" /><Input aria-label="Filter documents" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Filter documents…" className="h-8 border-white/10 bg-[#0d0e11] pl-8 text-xs" /></div><Select value={kind} onValueChange={setKind}><SelectTrigger aria-label="Filter by document kind" className="h-8 w-32 border-white/10 bg-[#0d0e11] text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All kinds</SelectItem><SelectItem value="scrape">Scrapes</SelectItem><SelectItem value="crawl">Crawls</SelectItem><SelectItem value="research">Research</SelectItem></SelectContent></Select><span className="ml-auto font-mono text-[10px] text-zinc-700">{filtered.length} files</span></FilterBar>
+          <div className="p-3 sm:p-4">{state === "loading" ? <SkeletonState /> : state === "error" ? <ErrorState description={error} onRetry={() => void load()} /> : <DataTable columns={columns} data={filtered} getRowId={(item) => item.stem} selectedId={selected?.stem} onRowSelect={select} empty={<EmptyState title="No documents found" description={query || kind !== "all" ? "Change the filters to see more documents." : "Scrapes, crawls, and research reports will appear here."} action={<Button size="sm" onClick={onStartCrawl}>Acquire source</Button>} />} />}</div>
         </CollectionContent>
       </InspectorPanel>
     </Workspace>
@@ -392,18 +578,31 @@ function CorpusWorkspace() {
   const [submittedQuery, setSubmittedQuery] = React.useState("");
   const [target, setTarget] = React.useState("all");
   const [selected, setSelected] = React.useState<CorpusRecord | null>(null);
+  const [startLoadRequest] = useLatestRequest();
 
   const load = React.useCallback(async () => {
+    const controller = startLoadRequest();
     setState("loading");
+    setError("");
     try {
       const params = new URLSearchParams({ limit: "100" });
       if (submittedQuery) params.set("q", submittedQuery);
       if (target !== "all") params.set("target", target);
-      const [records, summary] = await Promise.all([api<{ items: CorpusRecord[] }>(`/api/corpus?${params}`), api<{ stats: CorpusStats }>("/api/corpus/stats")]);
-      setItems(records.items); setStats(summary.stats); setState("ready");
-    } catch (loadError) { setError(messageOf(loadError)); setState("error"); }
-  }, [submittedQuery, target]);
-  React.useEffect(() => { load(); }, [load]);
+      const [records, summary] = await Promise.all([
+        api<{ items: CorpusRecord[] }>(`/api/corpus?${params}`, { signal: controller.signal }),
+        api<{ stats: CorpusStats }>("/api/corpus/stats", { signal: controller.signal }),
+      ]);
+      if (controller.signal.aborted) return;
+      setItems(records.items);
+      setStats(summary.stats);
+      setState("ready");
+    } catch (loadError) {
+      if (isAbortError(loadError)) return;
+      setError(messageOf(loadError));
+      setState("error");
+    }
+  }, [startLoadRequest, submittedQuery, target]);
+  React.useEffect(() => { void load(); }, [load]);
 
   const columns: DataColumn<CorpusRecord>[] = [
     { id: "record", header: "Record", cell: (item) => <div className="min-w-0"><p className="truncate text-zinc-200">{item.title || item.headingPath.at(-1) || item.url || "Untitled record"}</p><p className="mt-0.5 truncate font-mono text-[10px] text-zinc-700">{item.namespace ?? "default"} · chunk {item.chunkIndex ?? "—"}</p></div> },
@@ -416,7 +615,7 @@ function CorpusWorkspace() {
 
   return (
     <Workspace>
-      <PageHeader section="Prepare" title="Corpus" description="Inspect corpus-ready records, provenance, and quality signals." actions={<Button variant="outline" size="sm" onClick={load} disabled={state === "loading"}><RefreshCw className={cn(state === "loading" && "animate-spin")} />Refresh</Button>} />
+      <PageHeader section="Prepare" title="Corpus" description="Inspect corpus-ready records, provenance, and quality signals." actions={<Button variant="outline" size="sm" onClick={() => void load()} disabled={state === "loading"}><RefreshCw className={cn(state === "loading" && "animate-spin")} />Refresh</Button>} />
       <InspectorPanel open={Boolean(selected)} onClose={() => setSelected(null)} inspector={selected ? <InspectorContent><InspectorHeader eyebrow={`${selected.target} corpus record`} title={selected.title || selected.id || "Record"} onClose={() => setSelected(null)} /><KeyValueList items={[{ label: "ID", value: selected.id ?? "—" }, { label: "Namespace", value: selected.namespace ?? "—" }, { label: "Framework", value: selected.framework ?? "—" }, { label: "Target", value: <StatusBadge status={selected.target} tone="info" /> }, { label: "Quality", value: selected.qualityTier || "untiered" }, { label: "License", value: selected.licenseBucket ?? "unknown" }, { label: "Chunk", value: selected.chunkIndex ?? "—" }, { label: "Source", value: selected.url ? <a href={selected.url} target="_blank" rel="noreferrer" className="text-indigo-300 hover:underline">Open source</a> : "—" }]} /><CodeViewer className="flex-1" sources={{ markdown: selected.snippet, json: JSON.stringify(selected, null, 2) }} /></InspectorContent> : null}>
         <CollectionContent>
           {stats && <div className="grid shrink-0 grid-cols-2 gap-px border-b border-white/[0.075] bg-white/[0.075] sm:grid-cols-4">{[
@@ -426,12 +625,12 @@ function CorpusWorkspace() {
             { label: "Quality tiers", value: stats.tiers.length },
           ].map((item) => <div key={item.label} className="bg-[#0b0c0f] px-4 py-3"><p className="font-mono text-lg tabular-nums tracking-[-0.04em] text-zinc-200">{item.value.toLocaleString()}</p><p className="mt-0.5 text-[10px] text-zinc-700">{item.label}</p></div>)}</div>}
           <FilterBar>
-            <form className="flex min-w-0 flex-1 gap-2 sm:max-w-sm" onSubmit={(event) => { event.preventDefault(); setSubmittedQuery(query.trim()); }}><div className="relative min-w-0 flex-1"><Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-zinc-700" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search corpus text…" className="h-8 border-white/10 bg-[#0d0e11] pl-8 text-xs" /></div><Button type="submit" variant="outline" size="sm"><Filter />Filter</Button></form>
-            <Select value={target} onValueChange={setTarget}><SelectTrigger className="h-8 w-28 border-white/10 bg-[#0d0e11] text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All targets</SelectItem>{targetOptions.map((value) => <SelectItem key={value} value={value}>{value.toUpperCase()}</SelectItem>)}</SelectContent></Select>
+            <form className="flex min-w-0 flex-1 gap-2 sm:max-w-sm" onSubmit={(event) => { event.preventDefault(); setSubmittedQuery(query.trim()); }}><div className="relative min-w-0 flex-1"><Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-zinc-700" /><Input aria-label="Search corpus text" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search corpus text…" className="h-8 border-white/10 bg-[#0d0e11] pl-8 text-xs" /></div><Button type="submit" variant="outline" size="sm"><Filter />Filter</Button></form>
+            <Select value={target} onValueChange={setTarget}><SelectTrigger aria-label="Filter by corpus target" className="h-8 w-28 border-white/10 bg-[#0d0e11] text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All targets</SelectItem>{targetOptions.map((value) => <SelectItem key={value} value={value}>{value.toUpperCase()}</SelectItem>)}</SelectContent></Select>
             {(submittedQuery || target !== "all") && <Button variant="ghost" size="sm" className="text-zinc-600" onClick={() => { setQuery(""); setSubmittedQuery(""); setTarget("all"); }}><RotateCcw />Reset</Button>}
             <span className="ml-auto font-mono text-[10px] text-zinc-700">{items.length} shown</span>
           </FilterBar>
-          <div className="p-3 sm:p-4">{state === "loading" ? <SkeletonState /> : state === "error" ? <ErrorState description={error} onRetry={load} /> : <DataTable columns={columns} data={items} getRowId={(item) => item.id ?? `${item.file}:${item.chunkIndex}`} selectedId={selected?.id} onRowSelect={setSelected} empty={<EmptyState title="Corpus is empty" description="Build a RAG, SFT, or DAPT corpus to populate this workspace." />} />}</div>
+          <div className="p-3 sm:p-4">{state === "loading" ? <SkeletonState /> : state === "error" ? <ErrorState description={error} onRetry={() => void load()} /> : <DataTable columns={columns} data={items} getRowId={corpusRecordId} selectedId={selected ? corpusRecordId(selected) : null} onRowSelect={setSelected} empty={<EmptyState title="Corpus is empty" description="Build a RAG, SFT, or DAPT corpus to populate this workspace." />} />}</div>
         </CollectionContent>
       </InspectorPanel>
     </Workspace>
@@ -461,7 +660,7 @@ function normalizeProgress(value: unknown) {
 
 function crawlTimeline(status: string, progress: number): TimelineStep[] {
   const terminal = status === "completed";
-  const failed = ["failed", "cancelled"].includes(status);
+  const failed = ["failed", "cancelled", "interrupted"].includes(status);
   const activeIndex = terminal ? 5 : progress < 0.05 ? 0 : progress < 0.25 ? 1 : progress < 0.7 ? 2 : progress < 0.95 ? 3 : 4;
   return [
     ["Queue accepted", "Validate scope and create the frontier."],
@@ -488,4 +687,8 @@ function crawlEvents(job: CrawlJob) {
 function prettyJson(source: string) {
   if (!source) return "";
   try { return JSON.stringify(JSON.parse(source), null, 2); } catch { return source; }
+}
+
+function corpusRecordId(record: CorpusRecord) {
+  return record.id ?? `${record.file}:${record.chunkIndex}`;
 }

@@ -88,7 +88,7 @@ export function DataTable<T>({
                 {column.header}
               </TableHead>
             ))}
-            {onRowSelect && <TableHead className="w-8" />}
+            {onRowSelect && <TableHead className="w-10"><span className="sr-only">Actions</span></TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -98,17 +98,9 @@ export function DataTable<T>({
             return (
               <TableRow
                 key={id}
-                tabIndex={onRowSelect ? 0 : undefined}
-                aria-selected={selected}
                 onClick={() => onRowSelect?.(item)}
-                onKeyDown={(event) => {
-                  if (onRowSelect && (event.key === "Enter" || event.key === " ")) {
-                    event.preventDefault();
-                    onRowSelect(item);
-                  }
-                }}
                 className={cn(
-                  "group h-12 border-white/[0.065] transition-colors hover:bg-white/[0.035] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-400/50",
+                  "group h-12 border-white/[0.065] transition-colors hover:bg-white/[0.035]",
                   onRowSelect && "cursor-pointer active:bg-white/[0.055]",
                   selected && "bg-indigo-400/[0.07] hover:bg-indigo-400/[0.09]",
                 )}
@@ -119,8 +111,26 @@ export function DataTable<T>({
                   </TableCell>
                 ))}
                 {onRowSelect && (
-                  <TableCell className="w-8 px-2 text-zinc-700 group-hover:text-zinc-400">
-                    <ChevronRight className="size-3.5" />
+                  <TableCell className="w-10 px-1.5">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Open details for ${String(id)}`}
+                          aria-current={selected ? "true" : undefined}
+                          className="text-zinc-700 group-hover:text-zinc-400"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onRowSelect(item);
+                          }}
+                        >
+                          <ChevronRight className="size-3.5" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Open details</TooltipContent>
+                    </Tooltip>
                   </TableCell>
                 )}
               </TableRow>
@@ -176,7 +186,7 @@ export function InspectorPanel({
       <Panel id="content" minSize="44%">
         {children}
       </Panel>
-      <PanelSeparator className="group relative w-px bg-white/[0.08] outline-none focus-visible:bg-indigo-400">
+      <PanelSeparator aria-label="Resize inspector" className="group relative w-px bg-white/[0.08] outline-none focus-visible:bg-indigo-400">
         <div className="absolute left-1/2 top-1/2 z-10 flex h-8 w-3 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/10 bg-[#16171b] text-zinc-600 transition-colors group-hover:text-zinc-300">
           <GripVertical className="size-2.5" />
         </div>
@@ -211,7 +221,7 @@ export function KeyValueList({ items }: { items: Array<{ label: string; value: R
       {items.map((item) => (
         <div key={item.label} className="grid grid-cols-[112px_minmax(0,1fr)] gap-3 px-4 py-2.5 text-xs">
           <dt className="text-zinc-600">{item.label}</dt>
-          <dd className="min-w-0 break-words font-mono text-zinc-300">{item.value || "—"}</dd>
+          <dd className="min-w-0 break-words font-mono text-zinc-300">{item.value === null || item.value === undefined || item.value === "" ? "—" : item.value}</dd>
         </div>
       ))}
     </dl>
@@ -246,8 +256,12 @@ export function CodeViewer({ sources, className }: { sources: Partial<Record<Cod
                 className="absolute right-2 top-2 z-10 bg-[#111216]/80 text-zinc-500 backdrop-blur hover:text-zinc-100"
                 aria-label={`Copy ${codeLabels[kind]}`}
                 onClick={async () => {
-                  await navigator.clipboard.writeText(source);
-                  toast.success(`${codeLabels[kind]} copied`);
+                  try {
+                    await navigator.clipboard.writeText(source);
+                    toast.success(`${codeLabels[kind]} copied`);
+                  } catch {
+                    toast.error(`Couldn’t copy ${codeLabels[kind].toLowerCase()}`);
+                  }
                 }}
               >
                 <Copy />
@@ -270,7 +284,7 @@ export function ProgressTimeline({ steps }: { steps: TimelineStep[] }) {
   return (
     <ol className="space-y-0">
       {steps.map((step, index) => (
-        <li key={step.label} className="relative grid grid-cols-[20px_1fr] gap-3 pb-4 last:pb-0">
+        <li key={step.label} aria-current={step.state === "active" ? "step" : undefined} className="relative grid grid-cols-[20px_1fr] gap-3 pb-4 last:pb-0">
           {index < steps.length - 1 && <span className={cn("absolute left-[9px] top-4 h-[calc(100%-8px)] w-px", step.state === "done" ? "bg-indigo-400/50" : "bg-white/[0.08]")} />}
           <span className={cn("relative z-10 mt-0.5 flex size-5 items-center justify-center rounded-full border bg-[#0d0e11]", step.state === "done" && "border-indigo-400/50 text-indigo-300", step.state === "active" && "border-indigo-400 text-indigo-300 shadow-[0_0_0_3px_rgba(129,140,248,0.12)]", step.state === "pending" && "border-white/10 text-zinc-700", step.state === "error" && "border-rose-400/50 text-rose-300")}>
             {step.state === "done" ? <Check className="size-3" /> : step.state === "active" ? <LoaderCircle className="size-3 animate-spin" /> : step.state === "error" ? <AlertTriangle className="size-3" /> : <Circle className="size-2 fill-current" />}
@@ -298,7 +312,7 @@ export function EmptyState({ title, description, action, compact = false }: { ti
 
 export function ErrorState({ title = "Couldn’t load this view", description, onRetry }: { title?: string; description: string; onRetry?: () => void }) {
   return (
-    <div className="flex min-h-72 flex-col items-center justify-center px-8 text-center">
+    <div className="flex min-h-72 flex-col items-center justify-center px-8 text-center" role="alert">
       <div className="mb-3 flex size-8 items-center justify-center rounded-[7px] border border-rose-400/15 bg-rose-400/[0.07] text-rose-300"><AlertTriangle className="size-4" /></div>
       <h3 className="text-sm font-medium text-zinc-200">{title}</h3>
       <p className="mt-1 max-w-md text-xs leading-5 text-zinc-600">{description}</p>
@@ -309,7 +323,7 @@ export function ErrorState({ title = "Couldn’t load this view", description, o
 
 export function SkeletonState() {
   return (
-    <div className="space-y-2 rounded-[8px] border border-white/[0.08] p-3" aria-label="Loading">
+    <div className="space-y-2 rounded-[8px] border border-white/[0.08] p-3" aria-label="Loading" role="status">
       {Array.from({ length: 6 }).map((_, index) => (
         <div key={index} className="flex h-10 items-center gap-4 border-b border-white/[0.05] last:border-0">
           <Skeleton className="h-3 w-20 bg-white/[0.05]" />
