@@ -5,9 +5,9 @@ documents, and images into clean Markdown plus corpus-ready metadata. It uses a
 fast HTTP fetch first and escalates to Playwright only when a page needs a real
 browser.
 
-The service includes a local dashboard, a JSON API, optional Postgres
-persistence, structured extraction through an LLM, OCR, hybrid retrieval, and
-restart-safe crawl and research jobs.
+The supported Docker runtime includes a local Next.js operator GUI for starting
+crawls, inspecting runs and saved documents, and browsing corpus records. It
+also exposes the JSON API and optional stdio MCP adapter.
 
 ![CrawlTrove dashboard](docs/assets/dashboard.png)
 
@@ -209,6 +209,21 @@ python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 ```
+
+The App Router dashboard lives in `apps/app/`. Docker builds its static export
+and serves it from FastAPI, so the supported runtime does not need a Node
+process. For frontend-only development, keep FastAPI on port 8000 and run the
+Next.js development server with its same-origin proxy:
+
+```bash
+cd apps/app
+pnpm install --frozen-lockfile
+FASTAPI_URL=http://127.0.0.1:8000 pnpm dev
+```
+
+Then open <http://localhost:3000>. Use `FASTAPI_URL` only on the Next.js server;
+do not expose a backend URL in browser JavaScript unless cross-origin access is
+explicitly configured.
 
 Database-backed tests automatically skip when local Postgres is unavailable.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and

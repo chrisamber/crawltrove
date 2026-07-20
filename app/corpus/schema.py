@@ -21,7 +21,7 @@ ALLOWED_NAMESPACES = {
     "unknown",
 }
 
-# Quality tiers (Epic 3 S3). Optional; "" means untiered (legacy records).
+# Quality tiers are optional; "" means untiered (legacy records).
 ALLOWED_QUALITY_TIERS = {"high", "medium", "low", ""}
 
 # Loosened (2026-06-17): only the source URL is enforced non-empty — a URL-less
@@ -49,12 +49,12 @@ def new_record(**fields: Any) -> Dict[str, Any]:
         "chunk_type": "symbol_card",
         "namespace": "unknown",
         "text": "",
-        # Structure-aware chunking (Epic 3 S2) — optional; a page-level record
+        # Structure-aware chunking is optional; a page-level record
         # leaves chunk_index=0, parent_hash="", heading_path=[].
         "chunk_index": 0,
         "parent_hash": "",
         "heading_path": [],
-        # Quality-tiered routing (Epic 3 S3) — optional; "" == untiered.
+        # Quality-tiered routing is optional; "" == untiered.
         "quality_tier": "",
     }
     rec.update(fields)
@@ -73,8 +73,8 @@ def validate_record(rec: Dict[str, Any]) -> List[str]:
         errors.append(f"bad chunk_type: {rec.get('chunk_type')!r}")
     if rec.get("namespace") not in ALLOWED_NAMESPACES:
         errors.append(f"bad namespace: {rec.get('namespace')!r}")
-    # Optional chunk/tier fields: validate only when present (legacy records
-    # that predate S2/S3 simply omit them).
+    # Optional chunk/tier fields: validate only when present; older records
+    # simply omit them.
     if "chunk_index" in rec and not isinstance(rec["chunk_index"], int):
         errors.append(f"chunk_index must be an int: {rec.get('chunk_index')!r}")
     if "heading_path" in rec and not isinstance(rec["heading_path"], list):

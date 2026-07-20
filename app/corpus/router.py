@@ -5,7 +5,7 @@ Policy (from the spec's "practical rule"):
   SFT  : own task/answer pairs only (NEVER auto from scraped docs).
   DAPT : permissively-licensed code/docs + own corpus; avoid bulk Apple docs.
 
-Quality-tiered routing (Epic 3 S3): a ``low`` quality tier is kept out of
+Quality-tiered routing keeps a ``low`` quality tier out of
 SFT/DAPT by default (RAG keeps everything, tier stamped on the record). This is
 consumer-side filtering — the service still reports quality untouched.
 """
@@ -20,7 +20,7 @@ POLICY: Dict[str, Set[str]] = {
     "swift-org-permissive": {"rag", "dapt"},
     "cc-by-4.0": {"rag", "dapt"},
     "cc0-1.0": {"rag", "dapt"},
-    # Epic 3 S5: permissive code/docs are DAPT-eligible; community-contributed
+    # Permissive code/docs are DAPT-eligible; community-contributed
     # content (forums, unconfirmed tutorials/repos) is RAG-only until reviewed.
     "permissive": {"rag", "dapt"},
     "community-review-required": {"rag"},

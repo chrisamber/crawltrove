@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect swift.org blog + documentation pages (Epic 3 S5).
+"""Collect swift.org blog + documentation pages.
 
 swift.org content is Apache-2.0 (permissive → RAG + DAPT-eligible; see
 license_buckets.py source 'swiftorg'). Discovers content URLs from the site's

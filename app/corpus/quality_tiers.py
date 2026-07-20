@@ -1,4 +1,4 @@
-"""Map a page's quality report to a corpus quality tier (Epic 3 S3).
+"""Map a page's quality report to a corpus quality tier.
 
 The service's quality signal (app/quality.py) *scores, never drops* — it returns
 ``{passed, failures, signals}``. The corpus pipeline is the consumer and *is*

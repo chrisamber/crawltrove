@@ -55,7 +55,7 @@ def record_scrape_run(meta_dir, entry: Dict) -> None:
 
 
 def record_rebuild(meta_dir, entry: Dict) -> None:
-    """Append a corpus-rebuild event (Epic 3 S6). The rebuild regenerates the
+    """Append a corpus-rebuild event. The rebuild regenerates the
     corpus tree from scratch but must NOT rewrite ledger history — it appends
     one of these events instead (what was rebuilt, from how many artifacts)."""
     append_jsonl(Path(meta_dir) / "rebuilds.jsonl", entry)

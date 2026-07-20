@@ -17,6 +17,10 @@ tmp
 .design-sync
 # Third-party scraper scratch cache; local-only and never copied into the image.
 .firecrawl
+apps/app/node_modules
+apps/app/.next
+apps/app/out
+.pnpm-store
 docs
 tests
 swift_book.epub

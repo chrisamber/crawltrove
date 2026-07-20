@@ -1,4 +1,4 @@
-"""Tests for the Epic 3 S5 collectors + their license routing.
+"""Tests for the corpus collectors and their license routing.
 
 Hermetic: network fetch is injected as a fake; only the pure parsing/selection/
 routing logic is exercised. The collectors live in scripts/, imported as modules.
@@ -16,7 +16,7 @@ tutorials = importlib.import_module("scripts.scrape_tutorials")
 ghdocs = importlib.import_module("scripts.scrape_github_docs")
 
 
-# --- license buckets + routing (new S5 buckets) ---------------------------
+# --- license buckets + routing -------------------------------------------
 def test_new_buckets_are_known_and_routed():
     assert "permissive" in lb.ALL_BUCKETS
     assert "community-review-required" in lb.ALL_BUCKETS

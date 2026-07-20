@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Rebuild the whole corpus under the current routing/chunking/tiering rules
-(Epic 3 S6).
+"""Rebuild the whole corpus under the current routing/chunking/tiering rules.
 
 Re-runs `build_corpus` over every crawl artifact in ``data/crawls/`` into a
 fresh generation staged at ``data/corpus.new/``, then **swaps it in on success**
 (the previous tree is kept as ``data/corpus.bak/`` for rollback). This is how the
-existing corpus benefits from S2 structure-aware chunking + S3 quality tiering
+existing corpus benefits from structure-aware chunking and quality tiering
 without a re-scrape.
 
 Ledgers are append-only: the rebuild regenerates the corpus tree from scratch

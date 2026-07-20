@@ -1,3 +1,16 @@
+FROM node:22-bookworm-slim AS dashboard
+
+WORKDIR /dashboard
+
+RUN corepack enable
+
+COPY apps/app/package.json apps/app/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+
+COPY apps/app/ ./
+RUN pnpm build
+
+
 FROM mcr.microsoft.com/playwright/python:v1.60.0-jammy
 
 ENV PYTHONUNBUFFERED=1 \
@@ -21,6 +34,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/ ./app/
 COPY scripts/ ./scripts/
+COPY --from=dashboard /dashboard/out/ ./app/static/dashboard/
 
 RUN mkdir -p /workspace/data && chown -R pwuser:pwuser /workspace
 

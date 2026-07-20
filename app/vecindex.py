@@ -34,9 +34,9 @@ INDEX_DIR = os.path.join(DATA_DIR, "index")
 DB_PATH = os.path.join(INDEX_DIR, "vectors.db")
 
 # Chunking defaults (character-based approximation of a ~200-1200 token window;
-# generous for sentence-transformer context limits). S2 adds a structure-aware
-# chunker in the corpus pipeline; the service can't import it, so this paragraph
-# window is the service-side fallback the epic calls for.
+# generous for sentence-transformer context limits). A structure-aware chunker
+# exists in the corpus pipeline; the service can't import it, so this paragraph
+# window is the service-side fallback.
 MAX_CHARS = int(os.environ.get("EMBEDDINGS_CHUNK_CHARS", "1600"))
 CHUNK_OVERLAP = 160
 MAX_CHUNKS = 200
@@ -166,7 +166,7 @@ def chunk_text(text: str, *, max_chars: int = MAX_CHARS,
                overlap: int = CHUNK_OVERLAP, max_chunks: int = MAX_CHUNKS) -> List[str]:
     """Paragraph-window chunker: pack blank-line-delimited paragraphs into
     windows up to ``max_chars``, hard-splitting any oversized paragraph with a
-    small overlap. Pure function; the service-side fallback for S1."""
+    small overlap. Pure function; the service-side semantic-search fallback."""
     text = (text or "").strip()
     if not text:
         return []

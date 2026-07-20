@@ -1,7 +1,7 @@
 """Shared, side-effect-free mappers between scrape/crawl/extract output and the
-persistence layer's row shapes (Epic 2 consolidation).
+persistence layer's row shapes.
 
-Epic 1 inlined three things that drifted apart:
+Three inlined mappers had drifted apart:
   * crawler._normalize_url            -> normalize_url()
   * runner.page_fields_from_scrape    -> page_row_from_result()
   * crawler._db_page_fields           -> page_row_from_crawl_item()

@@ -1,4 +1,4 @@
-"""Tests for the corpus rebuild command (Epic 3 S6)."""
+"""Tests for the corpus rebuild command."""
 import importlib
 import json
 from pathlib import Path

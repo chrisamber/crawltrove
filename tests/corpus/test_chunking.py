@@ -1,4 +1,4 @@
-"""Tests for structure-aware Markdown chunking (Epic 3 S2)."""
+"""Tests for structure-aware Markdown chunking."""
 from app.corpus import chunking
 
 

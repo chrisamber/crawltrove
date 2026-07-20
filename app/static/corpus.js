@@ -1,6 +1,6 @@
 // Corpus browser view. Reads GET /api/corpus + /api/corpus/stats, renders stat
 // tiles, filter chips (target / namespace / tier), a substring filter, and a
-// paginated record list. Links into the S1 semantic search scoped to
+// paginated record list. Links into semantic search scoped to
 // kind=corpus. Same conventions as library.js/semantic.js: vanilla JS, esc().
 document.addEventListener('DOMContentLoaded', () => {
     const corpusView = document.getElementById('corpusView');

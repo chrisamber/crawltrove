@@ -278,7 +278,7 @@ class WebScraper:
         """Run the extraction pipeline on raw HTML and assemble the API result.
 
         status_code (the HTTP status of the fetch) and the verbatim pre-clean
-        html are threaded out additively for raw capture (Epic 2): status_code
+        html are threaded out additively for raw capture: status_code
         lands in metadata; the raw html rides on a private `_raw` channel the
         persistence layer consumes and strips before the API response is saved.
         """

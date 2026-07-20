@@ -1,4 +1,4 @@
-"""Epic 2 — monitoring: health DB state, structured logging, signal-error mirror.
+"""Tests for health DB state, structured logging, and the signal-error mirror.
 
 Backup scripts are shell and verified out-of-band (bash -n + a smoke run), not here.
 """
