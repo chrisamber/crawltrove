@@ -2,8 +2,8 @@
 
 Tier 1 is a plain HTTP GET through curl_cffi with Chrome TLS impersonation —
 no browser, ~10x cheaper than a Playwright render. Tier 2 (Playwright, in
-scraper.py) is only used when the cheap response looks like a JS shell, a
-bot challenge, or an outright block.
+scraper.py) is only used when a successful HTML response looks like a JS shell
+or bot challenge.
 """
 import ipaddress
 from typing import Any, Dict, Optional
@@ -15,9 +15,6 @@ from curl_cffi.requests import AsyncSession
 
 from app.url_safety import UnsafeUrlError, ensure_public_url
 
-# Statuses that usually mean "a real browser might still get through"
-ESCALATE_STATUSES = {401, 403, 406, 429, 503}
-
 # Lowercase substrings that mark bot-challenge interstitials
 CHALLENGE_MARKERS = (
     "just a moment",
@@ -28,8 +25,14 @@ CHALLENGE_MARKERS = (
     "attention required",
     "captcha",
 )
+STRONG_CHALLENGE_MARKERS = (
+    "checking your browser",
+    "verify you are human",
+    "enable javascript and cookies",
+    "cf-browser-verification",
+)
 
-# A rendered page with less visible text than this is probably an SPA shell
+# A short page needs explicit application structure before it is an SPA shell.
 MIN_VISIBLE_TEXT = 400
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 MAX_REDIRECTS = 30
@@ -97,22 +100,44 @@ async def fetch_http(url: str, timeout_s: int = 20) -> Optional[Dict[str, Any]]:
 
 
 def needs_browser(response: Optional[Dict[str, Any]]) -> bool:
-    """Decide whether the cheap HTTP response is good enough or we must render."""
-    if response is None:
-        return True
-    if response["status"] in ESCALATE_STATUSES or response["status"] >= 500:
-        return True
-    if "html" not in response.get("content_type", "") and response.get("content_type"):
-        return True
+    """Return whether a successful HTML response needs browser rendering."""
+    status = response.get("status") if response else None
+    if not isinstance(status, int) or not 200 <= status < 300:
+        return False
+
+    content_type = response.get("content_type", "").split(";", 1)[0].strip().lower()
+    if content_type not in {"text/html", "application/xhtml+xml"}:
+        return False
 
     html = response.get("html") or ""
-    lowered = html[:20000].lower()
-    if any(marker in lowered for marker in CHALLENGE_MARKERS):
+    if is_challenge_html(html):
         return True
 
-    # Visible-text check: empty SPA shells render to almost nothing
+    # A short complete page is valid. Escalate only when its structure also
+    # identifies it as an application shell that requires JavaScript.
     soup = BeautifulSoup(html, "html.parser")
+    roots = soup.select("#__next, #__nuxt, #root, #app, [data-reactroot]")
+    has_hydration = bool(soup.select("[data-reactroot], [data-reactid]"))
+    has_script_bundle = bool(soup.select("script[src]"))
     for el in soup(["script", "style", "noscript", "template"]):
         el.decompose()
     text = soup.get_text(" ", strip=True)
-    return len(text) < MIN_VISIBLE_TEXT
+    if len(text) >= MIN_VISIBLE_TEXT:
+        return False
+
+    return bool(roots) and (has_hydration or has_script_bundle)
+
+
+def is_challenge_html(html: str) -> bool:
+    """Return whether HTML looks like a bot-challenge interstitial."""
+    lowered = html[:20000].lower()
+    if any(marker in lowered for marker in STRONG_CHALLENGE_MARKERS):
+        return True
+    if not any(marker in lowered for marker in CHALLENGE_MARKERS):
+        return False
+    soup = BeautifulSoup(lowered, "html.parser")
+    return bool(soup.select(
+        "[id*='challenge'], [class*='challenge'], [id*='captcha'], "
+        "[class*='captcha'], [class*='turnstile'], iframe[src*='challenge'], "
+        "iframe[src*='captcha']"
+    ))
