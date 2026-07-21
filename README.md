@@ -26,9 +26,9 @@ corpus-quality signals.
 
 ![CrawlTrove Markdown extraction result](docs/assets/result.png)
 
-### Corpus-ready signals
+### Quality metadata
 
-![CrawlTrove quality, deduplication, license, language, and provenance signals](docs/assets/signals.png)
+![CrawlTrove quality metadata for a saved scrape](docs/assets/signals.png)
 
 ## Quick start
 
