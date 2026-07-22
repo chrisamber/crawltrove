@@ -22,6 +22,16 @@ def test_needs_browser_escalates_short_hydrated_application_shell():
     assert needs_browser(_response('<div id="root"></div><script src="/app.js"></script>'))
 
 
+def test_needs_browser_escalates_short_shell_with_inline_dom_render():
+    html = (
+        '<main class="quotes"></main>'
+        '<script src="/jquery.js"></script>'
+        '<script>$(".quotes").append("<article>Loaded by JavaScript</article>")</script>'
+    )
+
+    assert needs_browser(_response(html))
+
+
 def test_needs_browser_keeps_complete_short_html_on_http():
     assert not needs_browser(_response("<main><h1>Thanks</h1><p>We received it.</p></main>"))
 

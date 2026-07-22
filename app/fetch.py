@@ -31,6 +31,14 @@ STRONG_CHALLENGE_MARKERS = (
     "enable javascript and cookies",
     "cf-browser-verification",
 )
+DOM_RENDER_MARKERS = (
+    ".append(",
+    ".appendchild(",
+    ".innerhtml",
+    ".insertadjacenthtml(",
+    "document.createelement(",
+    "document.write(",
+)
 
 # A short page needs explicit application structure before it is an SPA shell.
 MIN_VISIBLE_TEXT = 400
@@ -119,13 +127,22 @@ def needs_browser(response: Optional[Dict[str, Any]]) -> bool:
     roots = soup.select("#__next, #__nuxt, #root, #app, [data-reactroot]")
     has_hydration = bool(soup.select("[data-reactroot], [data-reactid]"))
     has_script_bundle = bool(soup.select("script[src]"))
+    inline_scripts = " ".join(
+        script.get_text(" ", strip=True).lower()
+        for script in soup.select("script:not([src])")
+    )
+    has_inline_dom_render = any(
+        marker in inline_scripts for marker in DOM_RENDER_MARKERS
+    )
     for el in soup(["script", "style", "noscript", "template"]):
         el.decompose()
     text = soup.get_text(" ", strip=True)
     if len(text) >= MIN_VISIBLE_TEXT:
         return False
 
-    return bool(roots) and (has_hydration or has_script_bundle)
+    return (
+        bool(roots) and (has_hydration or has_script_bundle)
+    ) or has_inline_dom_render
 
 
 def is_challenge_html(html: str) -> bool:
