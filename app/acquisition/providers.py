@@ -48,12 +48,13 @@ class ProviderResult:
     remote_session_id: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass
 class ProviderFailure(Exception):
     code: str
     retryable: bool
     native_cost: NativeCost
     status_code: int | None = None
+    retry_after_seconds: int | None = None
 
 
 class ProviderAdapter(Protocol):

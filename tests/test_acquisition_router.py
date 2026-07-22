@@ -14,6 +14,18 @@ from app.crawl.config import (
 from tests.conftest import requires_db
 
 
+def test_provider_failure_retry_after_is_optional_and_preserves_existing_positionals():
+    from app.acquisition.providers import NativeCost, ProviderFailure
+
+    existing = ProviderFailure("provider_failure", True, NativeCost({}), 500)
+    delayed = ProviderFailure(
+        "provider_rate_limited", True, NativeCost({}), 429,
+        retry_after_seconds=30,
+    )
+    assert existing.retry_after_seconds is None
+    assert delayed.retry_after_seconds == 30
+
+
 async def _claimed_provider_task(firecrawl_credits=2):
     from app.crawl import repository
 
