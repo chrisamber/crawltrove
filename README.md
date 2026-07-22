@@ -168,6 +168,24 @@ for a trusted operator scraping internal services. An internet-facing or
 multi-user deployment must also enforce an outbound firewall that denies those
 networks; browser DNS cannot be pinned entirely in application code.
 
+### Optional owned egress and CAPTCHA workers
+
+Owned acquisition components are disabled by default. Enable only the required
+profile after enrolling its credentials and creating mode-0600 secret files:
+
+```bash
+EGRESS_CERTS_DIR=/secure/egress docker compose --profile egress up -d
+CAPTCHA_AUTHORIZED_DOMAINS=example.com docker compose --profile captcha up -d
+```
+
+`egress-agent` accepts mTLS HTTP CONNECT only on the Compose network; it has no
+published host port and independently rejects non-public destinations. The
+CAPTCHA profile starts a browser worker with local Tesseract OCR for authorized
+image/text challenges only. Token challenges always wait for a human or managed
+provider. The local bootstrap creates the dedicated `captcha.json` bundle with
+`browser,captcha,http` capabilities and a separate S3 prefix; it is still
+opt-in and never starts with the default Compose stack.
+
 ## Upgrading from an earlier local checkout
 
 The renamed Compose stack deliberately uses new `crawltrove_data` and

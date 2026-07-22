@@ -41,6 +41,12 @@ class CrawlService:
             "1", "true", "yes", "on",
         }
         if not remote_workers:
+            if os.environ.get("PROXY_POOLS_FILE", "").strip():
+                from app.acquisition.proxy import ProxyPool
+                self._worker.proxy_pool = ProxyPool.from_environment(
+                    await repository.require_pool(),
+                )
+                self._worker.capabilities.add("proxy")
             self._worker_task = asyncio.create_task(self._run_worker())
         self._maintenance_task = asyncio.create_task(self._run_maintenance())
 

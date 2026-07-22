@@ -863,6 +863,7 @@ async def claim_task(
                 deadline_at=job["deadline_at"],
                 config=config, byte_allowance=byte_allowance,
                 artifact_allowance=artifact_allowance,
+                required_capabilities=frozenset(task["required_capabilities"]),
             )
 
 

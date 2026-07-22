@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Provision the two private-network workers used by the default Compose stack."""
+"""Provision the private-network workers used by the local Compose stack."""
 
 import asyncio
 import json
@@ -12,6 +12,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 WORKERS = (
     ("standard", ("http",)),
     ("browser", ("browser", "http")),
+    ("captcha", ("browser", "captcha", "http")),
 )
 SAFE_SECRET = re.compile(r"^[A-Za-z0-9._~-]{16,128}$")
 

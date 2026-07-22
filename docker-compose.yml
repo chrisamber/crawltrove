@@ -123,6 +123,9 @@ services:
       - BROWSER_WORKER_ID=browser
       - BROWSER_S3_ACCESS_KEY=${BROWSER_S3_ACCESS_KEY:-crawltrove-browser}
       - BROWSER_S3_SECRET_KEY=${BROWSER_S3_SECRET_KEY:-crawltrove-browser-local-only}
+      - CAPTCHA_WORKER_ID=captcha
+      - CAPTCHA_S3_ACCESS_KEY=${CAPTCHA_S3_ACCESS_KEY:-crawltrove-captcha}
+      - CAPTCHA_S3_SECRET_KEY=${CAPTCHA_S3_SECRET_KEY:-crawltrove-captcha-local-only}
     volumes:
       - ./scripts/minio_init.sh:/scripts/minio_init.sh:ro
     read_only: true
@@ -162,6 +165,9 @@ services:
       - BROWSER_DB_PASSWORD=${BROWSER_DB_PASSWORD:-crawltrove-browser-db-local}
       - BROWSER_S3_ACCESS_KEY=${BROWSER_S3_ACCESS_KEY:-crawltrove-browser}
       - BROWSER_S3_SECRET_KEY=${BROWSER_S3_SECRET_KEY:-crawltrove-browser-local-only}
+      - CAPTCHA_DB_PASSWORD=${CAPTCHA_DB_PASSWORD:-crawltrove-captcha-db-local}
+      - CAPTCHA_S3_ACCESS_KEY=${CAPTCHA_S3_ACCESS_KEY:-crawltrove-captcha}
+      - CAPTCHA_S3_SECRET_KEY=${CAPTCHA_S3_SECRET_KEY:-crawltrove-captcha-local-only}
     volumes:
       - worker_enrollments:/enrollments
     tmpfs:
@@ -246,6 +252,70 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+
+  worker-captcha:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker-captcha
+    profiles: ["captcha"]
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_CHROOT
+    security_opt:
+      - seccomp=./seccomp_profile.json
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    environment:
+      - WORKER_ALLOW_INSECURE_DB=true
+      - WORKER_HEALTH_HOST=127.0.0.1
+      - WORKER_HEALTH_PORT=8081
+      - ARTIFACT_STORE_BACKEND=s3
+      - S3_BUCKET=${S3_BUCKET:-crawltrove-artifacts}
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_REGION=us-east-1
+      - CAPTCHA_AUTHORIZED_DOMAINS=${CAPTCHA_AUTHORIZED_DOMAINS:-}
+    volumes:
+      - type: volume
+        source: worker_enrollments
+        target: /run/crawltrove-workers
+        read_only: true
+    depends_on:
+      worker-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  egress-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: egress-agent
+    profiles: ["egress"]
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    expose:
+      - "9443"
+    volumes:
+      - type: bind
+        source: ${EGRESS_CERTS_DIR:-./secrets/egress}
+        target: /run/crawltrove-egress
+        read_only: true
     restart: unless-stopped
 
 volumes:

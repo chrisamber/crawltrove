@@ -11,6 +11,7 @@ from markdownify import markdownify
 
 from app import documents, extraction, fetch, lang, license_detect, quality
 from app import actions as page_actions
+from app.acquisition.captcha import CaptchaPolicy, solve_if_authorized
 from app.documents import vision
 from app.url_safety import UnsafeUrlError, ensure_public_url
 
@@ -18,6 +19,19 @@ logger = logging.getLogger("scraper")
 
 MAX_DOM_BYTES = 10 * 1024 * 1024
 MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024
+
+
+def _captcha_metadata(result) -> dict[str, str] | None:
+    """Expose only classified CAPTCHA outcome, never an answer or page payload."""
+    if result.kind is None:
+        return None
+    return {"kind": result.kind, "outcome": result.state}
+
+
+def _attach_captcha_metadata(result: Dict[str, Any], captcha: dict[str, str] | None) -> Dict[str, Any]:
+    if captcha and isinstance(result.get("metadata"), dict):
+        result["metadata"]["captcha"] = captcha
+    return result
 
 
 async def _guard_browser_websocket(websocket_route) -> bool:
@@ -118,17 +132,25 @@ class BrowserRuntime:
                      capture_screenshot: bool = False,
                      max_dom_bytes: int = MAX_DOM_BYTES,
                      max_screenshot_bytes: int = MAX_SCREENSHOT_BYTES,
-                     max_decoded_bytes: int = MAX_DOM_BYTES) -> Dict[str, Any]:
+                     max_decoded_bytes: int = MAX_DOM_BYTES,
+                     proxy: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Render one page in a fresh context, enforcing output-size limits."""
         await self.start()
         blocked_navigations = []
         context = None
-        transport = self._transport_factory()
+        transport = self._transport_factory(
+            proxy=proxy["server"],
+            proxy_auth=(proxy["username"], proxy["password"])
+            if proxy and "username" in proxy else None,
+        ) if proxy else self._transport_factory()
         remaining_bytes = [max_decoded_bytes]
         try:
             async with self._contexts:
                 async with asyncio.timeout(90):
-                    context = await self._browser.new_context(**_context_kwargs())
+                    context_options = _context_kwargs()
+                    if proxy is not None:
+                        context_options["proxy"] = proxy
+                    context = await self._browser.new_context(**context_options)
 
                     async def guard_request(route):
                         request = route.request
@@ -185,9 +207,25 @@ class BrowserRuntime:
                     html_content = await page.content()
                     if len(html_content.encode("utf-8")) > max_dom_bytes:
                         raise ValueError("Rendered DOM exceeds byte limit")
+                    captcha = None
+                    captcha_blocked = False
+                    policy = CaptchaPolicy.from_environment()
+                    if policy.domains:
+                        captcha_result = await solve_if_authorized(page, policy)
+                        captcha = _captcha_metadata(captcha_result)
+                        captcha_blocked = captcha_result.state in {
+                            "requires_human_or_provider", "final_host_not_authorized",
+                        }
+                        if captcha_result.state == "submitted":
+                            # One authorized submit may navigate; refresh only the
+                            # bounded DOM and final URL before normal classification.
+                            html_content = await page.content()
+                            if len(html_content.encode("utf-8")) > max_dom_bytes:
+                                raise ValueError("Rendered DOM exceeds byte limit")
                     # Preserve outcome ordering: challenge and HTTP failures are
                     # classified before title/metadata extraction or screenshots.
-                    if (fetch.is_challenge_html(html_content)
+                    blocked_challenge = captcha_blocked or fetch.is_challenge_html(html_content)
+                    if (blocked_challenge
                             or not isinstance(status_code, int)
                             or not 200 <= status_code < 300):
                         return {
@@ -198,6 +236,8 @@ class BrowserRuntime:
                             "description": "",
                             "screenshot": None,
                             "actions": action_outcomes,
+                            "captcha": captcha,
+                            "blocked_challenge": blocked_challenge,
                         }
                     screenshot = None
                     if capture_screenshot:
@@ -224,6 +264,7 @@ class BrowserRuntime:
                         "description": description.strip(),
                         "screenshot": screenshot,
                         "actions": action_outcomes,
+                        "captcha": captcha,
                     }
         except Exception as exc:
             if blocked_navigations:
@@ -270,6 +311,8 @@ class WebScraper:
                      capture_screenshot: bool = True,
                      max_decoded_bytes: Optional[int] = None,
                      before_browser: Optional[Callable[[], Awaitable[bool]]] = None,
+                     proxy: Optional[Dict[str, str]] = None,
+                     trust_env: bool = False,
                      ) -> Dict[str, Any]:
         """Scrape a URL and convert to Markdown.
 
@@ -279,14 +322,26 @@ class WebScraper:
         `actions` list (wait/click/scroll/fill/press) forces the browser tier
         and runs between navigation and content capture.
         """
+        if trust_env:
+            raise ValueError("environment proxy settings are not permitted")
+        if proxy is not None and (set(proxy) - {"server", "username", "password"}
+                                  or not isinstance(proxy.get("server"), str)
+                                  or ("username" in proxy) != ("password" in proxy)
+                                  or any(not isinstance(proxy[key], str)
+                                         for key in ("username", "password") if key in proxy)):
+            raise ValueError("proxy must contain a server and optional credentials")
         engine = page_actions.effective_engine(engine, actions)
+        fetch_options = {"proxy": proxy["server"]} if proxy else {}
+        if proxy and "username" in proxy:
+            fetch_options["proxy_auth"] = (proxy["username"], proxy["password"])
         # Tier 1: impersonated HTTP fetch, no browser
         if engine in ("auto", "http"):
             if max_decoded_bytes is None:
-                resp = await fetch.fetch_http(url)
+                resp = await fetch.fetch_http(url, **fetch_options)
             else:
                 resp = await fetch.fetch_http(
                     url, max_decoded_bytes=max_decoded_bytes,
+                    **fetch_options,
                 )
             if resp is None:
                 return self._error_result(
@@ -365,28 +420,30 @@ class WebScraper:
                 url, wait_for_ms=wait_for_ms, actions=actions,
                 capture_screenshot=capture_screenshot,
                 max_decoded_bytes=max_decoded_bytes or MAX_DOM_BYTES,
+                proxy=proxy,
             )
             html_content = rendered["html"]
             final_url = rendered["final_url"]
             status_code = rendered["status_code"]
+            captcha = rendered.get("captcha")
             if not _same_origin(url, final_url):
-                return self._error_result(
+                return _attach_captcha_metadata(self._error_result(
                     url, "Browser redirect crossed the crawl origin",
                     reason="policy_error", status_code=status_code,
                     engine_used="browser",
-                )
-            if fetch.is_challenge_html(html_content):
-                return self._error_result(
+                ), captcha)
+            if rendered.get("blocked_challenge") or fetch.is_challenge_html(html_content):
+                return _attach_captcha_metadata(self._error_result(
                     url, "Browser render returned a challenge page",
                     reason="blocked_challenge", status_code=status_code,
                     engine_used="browser",
-                )
+                ), captcha)
             if not isinstance(status_code, int) or not 200 <= status_code < 300:
-                return self._error_result(
+                return _attach_captcha_metadata(self._error_result(
                     url, f"Browser navigation failed (status {status_code})",
                     reason="http_status_error", status_code=status_code,
                     engine_used="browser",
-                )
+                ), captcha)
             result = self._build_result(
                 html_content, final_url, only_main_content,
                 engine_used="browser", title=rendered["title"],
@@ -396,7 +453,7 @@ class WebScraper:
                 result["_raw"]["screenshot"] = rendered["screenshot"]
             if rendered["actions"] is not None:
                 result["metadata"]["actions"] = rendered["actions"]
-            return result
+            return _attach_captcha_metadata(result, captcha)
         except UnsafeUrlError:
             raise
         except Exception as e:

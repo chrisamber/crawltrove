@@ -52,8 +52,11 @@ DEFAULT_MAX_DECODED_BYTES = 10 * 1024 * 1024
 class HttpFetcher:
     """A reusable HTTP session with SSRF validation and bounded response bodies."""
 
-    def __init__(self, session_factory=None):
+    def __init__(self, session_factory=None, *, proxy: str | None = None,
+                 proxy_auth: tuple[str, str] | None = None):
         self._session_factory = session_factory or AsyncSession
+        self._proxy = proxy
+        self._proxy_auth = proxy_auth
         self._session = None
         # DNS pin state is session-wide, so serialize requests that update it.
         self._lock = asyncio.Lock()
@@ -64,9 +67,12 @@ class HttpFetcher:
 
     def _start_unlocked(self) -> None:
         if self._session is None:
-            self._session = self._session_factory(
-                impersonate="chrome", trust_env=False
-            )
+            kwargs = {"impersonate": "chrome", "trust_env": False}
+            if self._proxy is not None:
+                kwargs["proxy"] = self._proxy
+            if self._proxy_auth is not None:
+                kwargs["proxy_auth"] = self._proxy_auth
+            self._session = self._session_factory(**kwargs)
 
     async def close(self) -> None:
         async with self._lock:
@@ -224,8 +230,22 @@ async def fetch_http(
     url: str,
     timeout_s: int = 20,
     max_decoded_bytes: int = DEFAULT_MAX_DECODED_BYTES,
+    *,
+    proxy: str | None = None,
+    proxy_auth: tuple[str, str] | None = None,
 ) -> Optional[Dict[str, Any]]:
     """Fetch through the process-local reusable session."""
+    if proxy is not None:
+        # Proxy DNS pinning and curl options are request-specific.  Do not let a
+        # leased worker mutate the shared direct-fetch session.
+        fetcher = HttpFetcher(proxy=proxy, proxy_auth=proxy_auth)
+        try:
+            return await fetcher.fetch(
+                url, timeout_s=timeout_s, max_decoded_bytes=max_decoded_bytes,
+            )
+        finally:
+            await fetcher.close()
+
     global _shared_fetcher
     if _shared_fetcher._session_factory is not AsyncSession:
         await _shared_fetcher.close()

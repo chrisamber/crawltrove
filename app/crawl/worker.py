@@ -16,7 +16,7 @@ class CrawlWorker:
     def __init__(self, worker_id: str, capabilities: set[str], repository: Any,
                  scraper: Any, *, heartbeat_seconds: float = 30,
                  discover: Callable = discover_links, robots_fetch: Callable = fetch.fetch_http,
-                 robots_sleep: Callable = asyncio.sleep):
+                 robots_sleep: Callable = asyncio.sleep, proxy_pool: Any = None):
         self.worker_id = worker_id
         self.capabilities = capabilities
         self.repository = repository
@@ -25,7 +25,9 @@ class CrawlWorker:
         self.discover = discover
         self.robots_fetch = robots_fetch
         self.robots_sleep = robots_sleep
+        self.proxy_pool = proxy_pool
         self.active_lease: tuple[Any, Any] | None = None
+        self.active_proxy_lease: Any | None = None
 
     async def run_once(self) -> bool:
         task = await self.repository.claim_task(self.worker_id, self.capabilities)
@@ -38,6 +40,7 @@ class CrawlWorker:
         heartbeat = asyncio.create_task(self._heartbeat(task, lease_lost))
         scrape_task = None
         lease_wait = None
+        proxy_lease = None
         try:
             async def reserve_browser() -> bool:
                 return await self.repository.reserve_browser_navigation(
@@ -54,15 +57,34 @@ class CrawlWorker:
                 if not lease_lost.is_set():
                     await self.repository.heartbeat(task.id, task.lease_token)
                 return True
+            if self.proxy_pool is not None and "proxy" in task.required_capabilities:
+                proxy_lease = await self.proxy_pool.select(
+                    task.origin_key, task_id=task.id, lease_token=task.lease_token,
+                )
+                if proxy_lease is None:
+                    await self._record_failure(
+                        task, {"metadata": {"reason": "transport_error"}}, None,
+                    )
+                    return True
+                async def attest(address: str) -> bool:
+                    return await self.proxy_pool.record_connected_ip(
+                        task.id, task.lease_token, proxy_lease.node_id, address,
+                    )
+                await proxy_lease.start(attest)
+                self.active_proxy_lease = proxy_lease
             timeout = (task.deadline_at - datetime.now(timezone.utc)).total_seconds()
-            scrape_task = asyncio.create_task(self.scraper.scrape(
-                task.url,
-                only_main_content=config.onlyMainContent,
-                engine=config.engine,
-                capture_screenshot=config.screenshots,
-                max_decoded_bytes=task.byte_allowance,
-                before_browser=reserve_browser,
-            ))
+            scrape_options = {
+                "only_main_content": config.onlyMainContent,
+                "engine": config.engine,
+                "capture_screenshot": config.screenshots,
+                "max_decoded_bytes": task.byte_allowance,
+                "before_browser": reserve_browser,
+            }
+            if proxy_lease is not None:
+                # Proxy workers never fall back to ambient or direct proxy settings.
+                scrape_options["proxy"] = proxy_lease.playwright_proxy()
+                scrape_options["trust_env"] = False
+            scrape_task = asyncio.create_task(self.scraper.scrape(task.url, **scrape_options))
             lease_wait = asyncio.create_task(lease_lost.wait())
             done, _ = await asyncio.wait(
                 {scrape_task, lease_wait}, timeout=timeout,
@@ -80,10 +102,12 @@ class CrawlWorker:
             if lease_lost.is_set():
                 return True
             if not scraped.get("success"):
-                await self._record_failure(task, scraped)
+                await self._record_failure(task, scraped, proxy_lease)
                 return True
 
             metadata = dict(scraped.get("metadata") or {})
+            if proxy_lease is not None:
+                metadata["proxy_id"] = proxy_lease.node_id
             raw = scraped.get("_raw") or {}
             if raw.get("screenshot"):
                 metadata["screenshot_bytes"] = len(raw["screenshot"])
@@ -102,7 +126,7 @@ class CrawlWorker:
             return True
         except Exception as exc:
             if not lease_lost.is_set():
-                await self._record_failure(task, {"error": str(exc)})
+                await self._record_failure(task, {"error": str(exc)}, proxy_lease)
             return True
         finally:
             if lease_wait is not None and not lease_wait.done():
@@ -117,6 +141,10 @@ class CrawlWorker:
             except asyncio.CancelledError:
                 pass
             self.active_lease = None
+            self.active_proxy_lease = None
+            if proxy_lease is not None:
+                await proxy_lease.close()
+            await self._release_proxy(task, proxy_lease)
 
     async def _heartbeat(self, task: Any, lease_lost: asyncio.Event) -> None:
         while True:
@@ -125,11 +153,22 @@ class CrawlWorker:
                 lease_lost.set()
                 return
 
-    async def _record_failure(self, task: Any, scraped: dict) -> None:
+    async def _record_failure(self, task: Any, scraped: dict, proxy_lease: Any = None) -> None:
         metadata = scraped.get("metadata") or {}
         decision = classify_failure(
             metadata.get("reason", "transport_error"), metadata.get("status_code")
         )
+        if proxy_lease is not None:
+            if metadata.get("reason") in {"blocked", "blocked_challenge"}:
+                await self.proxy_pool.mark_failure(
+                    proxy_lease.node_id, "blocked", task_id=task.id,
+                    lease_token=task.lease_token,
+                )
+            elif decision.error_class == "transport":
+                await self.proxy_pool.mark_failure(
+                    proxy_lease.node_id, "transport", task_id=task.id,
+                    lease_token=task.lease_token,
+                )
         if decision.retry:
             delay = backoff_seconds(task.attempt, metadata.get("retry_after"))
             await self.repository.retry_task(
@@ -139,6 +178,10 @@ class CrawlWorker:
             )
         else:
             await self.repository.fail_task(task.id, task.lease_token, decision, metadata)
+
+    async def _release_proxy(self, task: Any, proxy_lease: Any) -> None:
+        if proxy_lease is not None:
+            await self.proxy_pool.release_proxy(task.id, task.lease_token)
 
     async def _robots_allowed(self, task: Any, config: CrawlConfig) -> bool:
         if not hasattr(self.repository, "robots_cache"):

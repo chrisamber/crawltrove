@@ -4,6 +4,7 @@ import pytest
 
 from app import fetch
 from app import scraper as scraper_mod
+from app.acquisition.captcha import CaptchaResult
 from app.scraper import WebScraper
 
 
@@ -141,6 +142,15 @@ class _MetaPage:
         return "immediate description"
 
 
+class _AuthorizedCaptchaPage(_MetaPage):
+    def __init__(self):
+        self.url = "https://example.com/challenge"
+        self.html = "<html><body>captcha</body></html>"
+
+    async def content(self):
+        return self.html
+
+
 class _FailedNavigationPage:
     async def goto(self, *args, **kwargs):
         return SimpleNamespace(status=404)
@@ -196,6 +206,59 @@ async def test_browser_reads_description_with_immediate_dom_evaluation(monkeypat
 
     assert result["success"] is True
     assert captured["description"] == "immediate description"
+
+
+async def test_browser_records_authorized_local_captcha_without_answer(monkeypatch):
+    page = _AuthorizedCaptchaPage()
+    monkeypatch.setenv("CAPTCHA_AUTHORIZED_DOMAINS", "example.com")
+    monkeypatch.setattr(scraper_mod, "async_playwright", lambda: _PlaywrightManager(page))
+    monkeypatch.setattr(scraper_mod, "ensure_public_url", _public_url)
+    monkeypatch.setattr(scraper_mod, "stealth_async", _no_stealth)
+    monkeypatch.setattr(fetch, "is_challenge_html", lambda html: "captcha" in html, raising=False)
+
+    async def solved(current_page, policy):
+        assert policy.allows_url(current_page.url)
+        current_page.url = "https://example.com/final"
+        current_page.html = "<html><body>solved page</body></html>"
+        return CaptchaResult("submitted", "image_text")
+
+    monkeypatch.setattr(scraper_mod, "solve_if_authorized", solved)
+    scraper = WebScraper()
+    captured = {}
+
+    def build_result(html, url, *args, **kwargs):
+        captured.update(html=html, url=url)
+        return {"success": True, "metadata": {}, "_raw": {}}
+
+    monkeypatch.setattr(scraper, "_build_result", build_result)
+    result = await scraper.scrape("https://example.com/challenge", engine="browser")
+
+    assert result["success"] is True
+    assert captured == {"html": "<html><body>solved page</body></html>", "url": "https://example.com/final"}
+    assert result["metadata"]["captcha"] == {"kind": "image_text", "outcome": "submitted"}
+    assert "answer" not in result["metadata"]["captcha"]
+
+
+async def test_browser_blocks_token_or_ambiguous_captcha_outcomes(monkeypatch):
+    page = _AuthorizedCaptchaPage()
+    page.html = "<html><body>interstitial</body></html>"
+    monkeypatch.setenv("CAPTCHA_AUTHORIZED_DOMAINS", "example.com")
+    monkeypatch.setattr(scraper_mod, "async_playwright", lambda: _PlaywrightManager(page))
+    monkeypatch.setattr(scraper_mod, "ensure_public_url", _public_url)
+    monkeypatch.setattr(scraper_mod, "stealth_async", _no_stealth)
+    monkeypatch.setattr(fetch, "is_challenge_html", lambda _html: False, raising=False)
+
+    async def requires_human(*_args):
+        return CaptchaResult("requires_human_or_provider", "turnstile")
+
+    monkeypatch.setattr(scraper_mod, "solve_if_authorized", requires_human)
+    result = await WebScraper().scrape("https://example.com/challenge", engine="browser")
+
+    assert result["success"] is False
+    assert result["metadata"]["reason"] == "blocked_challenge"
+    assert result["metadata"]["captcha"] == {
+        "kind": "turnstile", "outcome": "requires_human_or_provider",
+    }
 
 
 async def test_browser_non_2xx_navigation_is_not_success(monkeypatch):

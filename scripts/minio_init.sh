@@ -48,6 +48,7 @@ EOF
 
 configure_worker "$STANDARD_WORKER_ID" "$STANDARD_S3_ACCESS_KEY" "$STANDARD_S3_SECRET_KEY"
 configure_worker "$BROWSER_WORKER_ID" "$BROWSER_S3_ACCESS_KEY" "$BROWSER_S3_SECRET_KEY"
+configure_worker "$CAPTCHA_WORKER_ID" "$CAPTCHA_S3_ACCESS_KEY" "$CAPTCHA_S3_SECRET_KEY"
 
 # Import replaces the lifecycle document, keeping this init operation idempotent
 # and limiting expiration to temporary worker uploads.
@@ -64,6 +65,12 @@ cat > /tmp/lifecycle.json <<EOF
       "ID": "expire-$BROWSER_WORKER_ID-tmp",
       "Status": "Enabled",
       "Filter": {"Prefix": "workers/$BROWSER_WORKER_ID/tmp/"},
+      "Expiration": {"Days": 1}
+    },
+    {
+      "ID": "expire-$CAPTCHA_WORKER_ID-tmp",
+      "Status": "Enabled",
+      "Filter": {"Prefix": "workers/$CAPTCHA_WORKER_ID/tmp/"},
       "Expiration": {"Days": 1}
     }
   ]

@@ -148,6 +148,7 @@ async def test_health_server_reports_ready_and_live(insecure_config):
 def test_remote_repository_exposes_worker_policy_boundaries():
     for method in (
         "reserve_browser_navigation", "robots_cache", "store_robots", "block_robots",
+        "assign_proxy", "record_proxy_ip", "fail_proxy", "release_proxy",
     ):
         assert callable(getattr(RemoteRepository, method))
 

@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from app.crawl.worker import CrawlWorker
+from app.acquisition.proxy import RemoteProxyPool
 from app.artifacts.base import ArtifactIntegrityError
 from app.scraper import WebScraper
 from app.worker_config import WorkerConfig
@@ -109,8 +110,11 @@ class WorkerRuntime:
         self._stop = asyncio.Event()
         artifact_repository = _ArtifactRepository(repository, artifacts)
         monitored_repository = _HeartbeatRepository(artifact_repository, self)
+        proxy_pool = (RemoteProxyPool.from_environment(monitored_repository)
+                      if "proxy" in config.capabilities else None)
         self.worker = worker or CrawlWorker(
             config.worker_id, set(config.capabilities), monitored_repository, self.scraper,
+            proxy_pool=proxy_pool,
         )
 
     async def tick(self) -> bool:

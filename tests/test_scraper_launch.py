@@ -164,3 +164,77 @@ async def test_browser_route_aborts_when_pinned_byte_allowance_is_exhausted():
     await runtime.render("https://example.com", max_decoded_bytes=3)
     await runtime.close()
     assert route.aborted == "blockedbyclient"
+
+
+async def test_browser_proxy_passes_credentials_to_fulfilled_request_transport(monkeypatch):
+    from app.scraper import BrowserRuntime
+
+    monkeypatch.delenv("CAPTCHA_AUTHORIZED_DOMAINS", raising=False)
+    transport_kwargs = {}
+
+    class Transport:
+        def __init__(self, **kwargs):
+            transport_kwargs.update(kwargs)
+
+        async def close(self):
+            pass
+
+    class Page:
+        async def goto(self, *args, **kwargs):
+            return type("Response", (), {"status": 200})()
+
+        async def content(self):
+            return "<html><body>ok</body></html>"
+
+        async def title(self):
+            return "OK"
+
+        async def evaluate(self, _script):
+            return ""
+
+    class Context:
+        async def route(self, *args):
+            pass
+
+        async def route_web_socket(self, *args):
+            pass
+
+        async def new_page(self):
+            return Page()
+
+        async def close(self):
+            pass
+
+    class Browser:
+        async def new_context(self, **kwargs):
+            assert kwargs["proxy"] == {
+                "server": "https://edge-a:9443", "username": "user", "password": "secret",
+            }
+            return Context()
+
+        async def close(self):
+            pass
+
+    class Playwright:
+        class chromium:
+            @staticmethod
+            async def launch(**kwargs):
+                return Browser()
+
+    class Manager:
+        async def __aenter__(self):
+            return Playwright()
+
+        async def __aexit__(self, *args):
+            pass
+
+    runtime = BrowserRuntime(lambda: Manager(), transport_factory=Transport)
+    await runtime.render(
+        "https://example.com", proxy={
+            "server": "https://edge-a:9443", "username": "user", "password": "secret",
+        },
+    )
+    await runtime.close()
+    assert transport_kwargs == {
+        "proxy": "https://edge-a:9443", "proxy_auth": ("user", "secret"),
+    }

@@ -37,12 +37,19 @@ class RemoteRepository:
             )
         if row is None:
             return None
+        async with self.pool.acquire() as conn:
+            required = await conn.fetchval(
+                "SELECT worker_api.task_capabilities($1,$2)", row["id"], row["lease_token"],
+            )
+        if required is None:
+            return None
         return ClaimedTask(
             id=row["id"], job_id=row["job_id"], url=row["url"],
             normalized_url=row["normalized_url"], origin_key=row["origin_key"],
             depth=row["depth"], attempt=row["attempt"], lease_token=row["lease_token"],
             deadline_at=row["deadline_at"], config=_loads(row["config"]),
             byte_allowance=row["byte_allowance"], artifact_allowance=row["artifact_allowance"],
+            required_capabilities=frozenset(required),
         )
 
     async def heartbeat(self, task_id: UUID, lease_token: UUID) -> bool:
@@ -54,6 +61,36 @@ class RemoteRepository:
             return bool(await conn.fetchval(
                 "SELECT worker_api.reserve_browser_navigation($1,$2)",
                 task_id, lease_token,
+            ))
+
+    async def assign_proxy(self, task_id: UUID, lease_token: UUID, origin_key: str) -> Optional[dict]:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM worker_api.assign_proxy($1,$2,$3)",
+                task_id, lease_token, origin_key,
+            )
+        return dict(row) if row is not None else None
+
+    async def record_proxy_ip(self, task_id: UUID, lease_token: UUID,
+                              node_id: str, address: str) -> bool:
+        async with self.pool.acquire() as conn:
+            return bool(await conn.fetchval(
+                "SELECT worker_api.record_proxy_ip($1,$2,$3,$4::INET)",
+                task_id, lease_token, node_id, address,
+            ))
+
+    async def fail_proxy(self, task_id: UUID, lease_token: UUID, node_id: str,
+                         outcome: str, cooldown_seconds: int, offline_after: int) -> bool:
+        async with self.pool.acquire() as conn:
+            return bool(await conn.fetchval(
+                "SELECT worker_api.proxy_failure($1,$2,$3,$4,$5,$6)",
+                task_id, lease_token, node_id, outcome, cooldown_seconds, offline_after,
+            ))
+
+    async def release_proxy(self, task_id: UUID, lease_token: UUID) -> bool:
+        async with self.pool.acquire() as conn:
+            return bool(await conn.fetchval(
+                "SELECT worker_api.release_proxy($1,$2)", task_id, lease_token,
             ))
 
     async def robots_cache(self, origin_key: str) -> Optional[dict]:

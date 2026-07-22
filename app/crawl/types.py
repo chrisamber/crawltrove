@@ -18,6 +18,7 @@ class ClaimedTask:
     config: Mapping[str, Any]
     byte_allowance: int
     artifact_allowance: int
+    required_capabilities: frozenset[str] = field(default_factory=frozenset)
 
 
 @dataclass(frozen=True)
