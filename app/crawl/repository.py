@@ -5,12 +5,17 @@ database: accepting a crawl without one would create work that cannot recover.
 """
 import hashlib
 import json
+import math
 import uuid
+from collections.abc import Mapping
+from dataclasses import dataclass
+from decimal import Decimal
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
 from app import normalize
+from app.acquisition.providers import ProviderProtocolError, ROUTE_NATIVE_METERS
 from app.crawl.config import CrawlConfig
 from app.crawl.types import ClaimedTask, TaskResult
 from app.db.pool import get_pool
@@ -32,6 +37,17 @@ class PersistenceUnavailable(RuntimeError):
     """Raised when durable crawl storage is not configured or reachable."""
 
 
+@dataclass(frozen=True)
+class ReservedAcquisitionAttempt:
+    """One provider call whose native cost has been reserved."""
+
+    id: UUID
+    task_id: UUID
+    route: str
+    provider: str
+    reserved_cost: dict[str, int | float]
+
+
 async def require_pool() -> Any:
     """Return the durable-crawl pool or fail before accepting work."""
     pool = await get_pool()
@@ -44,6 +60,43 @@ def _loads(value: Any) -> Any:
     if isinstance(value, (str, bytes, bytearray)):
         return json.loads(value)
     return value
+
+
+def _provider_usage_rows(config: CrawlConfig) -> tuple[tuple[str, str, int | float], ...]:
+    budgets = config.acquisition.creditBudgets
+    rows: list[tuple[str, str, int | float]] = []
+    if budgets.firecrawl is not None:
+        rows.append(("firecrawl", "credits", budgets.firecrawl.credits))
+    if budgets.brightdata is not None:
+        rows.append(("brightdata", "requests", budgets.brightdata.requests))
+    if budgets.browserbase is not None:
+        rows.extend((
+            ("browserbase", "browserMinutes", budgets.browserbase.browserMinutes),
+            ("browserbase", "proxyBytes", budgets.browserbase.proxyBytes),
+        ))
+    return tuple(rows)
+
+
+def _native_cost(route: str, values: Any) -> tuple[str, dict[str, int | float]]:
+    """Reject ambiguous or impossible native meter values before a DB write."""
+    try:
+        provider, expected = ROUTE_NATIVE_METERS[route]
+    except KeyError as exc:
+        raise ProviderProtocolError(f"unknown acquisition route: {route}") from exc
+    if not isinstance(values, Mapping) or set(values) != expected:
+        raise ProviderProtocolError(
+            f"{route} must report exactly {sorted(expected)!r} native meter keys"
+        )
+    normalized: dict[str, int | float] = {}
+    for meter, value in values.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ProviderProtocolError(f"{route} meter {meter} is not numeric")
+        if not math.isfinite(value) or value < 0:
+            raise ProviderProtocolError(f"{route} meter {meter} is invalid")
+        normalized[meter] = value
+    if route == "browserbase_session" and normalized["proxyBytes"] != 0:
+        raise ProviderProtocolError("Browserbase managed proxies are disabled")
+    return provider, normalized
 
 
 async def _event(
@@ -95,6 +148,13 @@ async def submit_job(
                     config.maxBytes, config.maxArtifactBytes, config.timeoutSeconds,
                     idempotency_key,
                 )
+                for provider, meter, limit_value in _provider_usage_rows(config):
+                    await conn.execute(
+                        """INSERT INTO crawl_provider_usage
+                           (job_id, provider, meter, limit_value)
+                           VALUES ($1, $2, $3, $4)""",
+                        job_id, provider, meter, limit_value,
+                    )
                 await conn.execute(
                     """INSERT INTO crawl_tasks
                        (id, job_id, original_url, normalized_url, url_hash, origin_key,
@@ -368,6 +428,144 @@ async def _fenced_task(conn: Any, task_id: UUID, lease_token: UUID) -> Any:
            FOR UPDATE OF t, j""",
         task_id, lease_token,
     )
+
+
+async def reserve_acquisition_attempt(
+    task_id: UUID,
+    lease_token: UUID,
+    route: str,
+    reserved_cost: Mapping[str, int | float],
+) -> Optional[ReservedAcquisitionAttempt]:
+    """Atomically reserve one provider call while a task lease remains current."""
+    provider, cost = _native_cost(route, reserved_cost)
+    pool = await require_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            task = await _fenced_task(conn, task_id, lease_token)
+            if task is None or await _reject_inactive_lease(conn, task):
+                return None
+            config = _loads(task["job_config"])
+            acquisition = config.get("acquisition") or {}
+            total_cap = min(4, int(acquisition.get("maxAttempts", 4)))
+            total_attempts = await conn.fetchval(
+                """SELECT count(*) FROM acquisition_attempts
+                   WHERE task_id = $1 AND lease_token IS NOT NULL""",
+                task_id,
+            )
+            route_attempts = await conn.fetchval(
+                """SELECT count(*) FROM acquisition_attempts
+                   WHERE task_id = $1 AND route = $2 AND lease_token IS NOT NULL""",
+                task_id, route,
+            )
+            if total_attempts >= total_cap or route_attempts >= min(2, total_cap):
+                return None
+
+            meters = sorted(cost)
+            usage_rows = await conn.fetch(
+                """SELECT meter, limit_value, reserved_value, consumed_value
+                   FROM crawl_provider_usage
+                   WHERE job_id = $1 AND provider = $2 AND meter = ANY($3::TEXT[])
+                   ORDER BY meter FOR UPDATE""",
+                task["job_id"], provider, meters,
+            )
+            if {row["meter"] for row in usage_rows} != set(meters):
+                return None
+            for usage in usage_rows:
+                amount = Decimal(str(cost[usage["meter"]]))
+                remaining = (
+                    usage["limit_value"] - usage["reserved_value"]
+                    - usage["consumed_value"]
+                )
+                if amount > remaining:
+                    return None
+            for usage in usage_rows:
+                await conn.execute(
+                    """UPDATE crawl_provider_usage
+                       SET reserved_value = reserved_value + $4
+                       WHERE job_id = $1 AND provider = $2 AND meter = $3""",
+                    task["job_id"], provider, usage["meter"],
+                    Decimal(str(cost[usage["meter"]])),
+                )
+            # Keep legacy worker-attempt numbers (1..max_attempts) intact.
+            # Provider route attempts are append-only subattempts of that lease.
+            attempt_number = task["attempt_count"] * 1000 + total_attempts + 1
+            attempt_id = uuid.uuid4()
+            await conn.execute(
+                """INSERT INTO acquisition_attempts
+                   (id, job_id, task_id, attempt_number, route, provider, lease_token,
+                    reserved_cost)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)""",
+                attempt_id, task["job_id"], task_id, attempt_number, route,
+                provider, lease_token, json.dumps(cost),
+            )
+            return ReservedAcquisitionAttempt(
+                id=attempt_id,
+                task_id=task_id,
+                route=route,
+                provider=provider,
+                reserved_cost=cost,
+            )
+
+
+async def finish_acquisition_attempt(
+    attempt_id: UUID,
+    lease_token: UUID,
+    outcome: str,
+    actual_cost: Mapping[str, int | float],
+    *,
+    cost_estimated: bool = False,
+) -> bool:
+    """Finalize a reserved provider call once, converting only actual usage."""
+    pool = await require_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            attempt = await conn.fetchrow(
+                "SELECT * FROM acquisition_attempts WHERE id = $1 FOR UPDATE", attempt_id,
+            )
+            if attempt is None or attempt["lease_token"] != lease_token:
+                return False
+            task = await _fenced_task(conn, attempt["task_id"], lease_token)
+            if task is None or await _reject_inactive_lease(conn, task):
+                return False
+            if attempt["finished_at"] is not None:
+                return False
+            provider, actual = _native_cost(attempt["route"], actual_cost)
+            reserved = _loads(attempt["reserved_cost"])
+            reserved_provider, reserved_cost = _native_cost(attempt["route"], reserved)
+            if provider != attempt["provider"] or reserved_provider != provider:
+                raise ProviderProtocolError("provider attempt route does not match its ledger")
+            for meter, value in actual.items():
+                if Decimal(str(value)) > Decimal(str(reserved_cost[meter])):
+                    raise ProviderProtocolError("provider reported more native usage than reserved")
+
+            meters = sorted(actual)
+            usage_rows = await conn.fetch(
+                """SELECT meter FROM crawl_provider_usage
+                   WHERE job_id = $1 AND provider = $2 AND meter = ANY($3::TEXT[])
+                   ORDER BY meter FOR UPDATE""",
+                task["job_id"], provider, meters,
+            )
+            if {row["meter"] for row in usage_rows} != set(meters):
+                raise ProviderProtocolError("provider usage meter is missing")
+            for meter in meters:
+                reserved_value = Decimal(str(reserved_cost[meter]))
+                actual_value = Decimal(str(actual[meter]))
+                await conn.execute(
+                    """UPDATE crawl_provider_usage
+                       SET reserved_value = reserved_value - $4,
+                           consumed_value = consumed_value + $5
+                       WHERE job_id = $1 AND provider = $2 AND meter = $3""",
+                    task["job_id"], provider, meter, reserved_value, actual_value,
+                )
+            await conn.execute(
+                """UPDATE acquisition_attempts
+                   SET finished_at = now(),
+                       duration_ms = EXTRACT(EPOCH FROM now() - started_at) * 1000,
+                       actual_cost = $2::jsonb, outcome = $3, cost_estimated = $4
+                   WHERE id = $1""",
+                attempt_id, json.dumps(actual), outcome, cost_estimated,
+            )
+            return True
 
 
 def _response_cap(url: str) -> int:
