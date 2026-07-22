@@ -12,7 +12,8 @@ evidence:
 - **Observed implementation:** behavior present in the local source.
 - **Observed runtime:** behavior measured against the running Docker service.
 - **Documented external capability:** behavior described by a competitor's
-  official documentation. No paid competitor calls were made.
+  official documentation. No paid competitor calls were made during the
+  initial evaluation; a later Firecrawl smoke is separated below.
 
 The comparison is intentionally acquisition-focused. Retrieval, research, and
 corpus governance are included where they change the product boundary, but they
@@ -107,6 +108,30 @@ The full local test suite passed during the evaluation:
 The suite is broad at the API, persistence, corpus, and pure-function layers,
 but browser actions are primarily tested through fake page objects. The
 browser defects below therefore remain outside the current regression gate.
+
+## Follow-up competitive acquisition smoke
+
+On 2026-07-22, the release candidate at `ddf79cb6` was compared with Crawl4AI
+0.9.2 and Firecrawl CLI 1.18.0. Each tool received one fresh request for the
+same four URLs, with main-content extraction enabled and cache reuse disabled.
+
+| Case | CrawlTrove | Crawl4AI | Firecrawl |
+| --- | --- | --- | --- |
+| Short HTML | Passed · 0.352 s · 183 chars | Passed · 0.239 s · 166 chars | Passed · 1.278 s · 167 chars |
+| JavaScript | Passed · 3.181 s · 1,080 chars | Passed · 1.749 s · 1,666 chars | Passed · 2.969 s · 1,505 chars |
+| Plain text | Passed · 0.863 s · 23,860 chars | Passed · 0.763 s · 23,876 chars | Passed · 3.561 s · 24,428 chars |
+| PDF | Passed · 0.677 s · 14 chars | Failed · 0.286 s · expected text absent | Passed · 1.063 s · 18 chars |
+
+“Passed” means the request succeeded and the expected fixture text appeared in
+the Markdown. CrawlTrove and Firecrawl passed 4/4 cases; Crawl4AI passed 3/4.
+Firecrawl used its basic proxy tier and four credits. Its durations are the
+CLI-reported request times; the other durations were measured by the local
+benchmark process. One run per case is a correctness smoke, not a statistically
+meaningful latency or reliability benchmark.
+
+The smoke initially exposed a false-success result for CrawlTrove's JavaScript
+fixture. Commit `ddf79cb6` fixed the shared browser-escalation classifier, and
+the table reports the verified post-fix run.
 
 ## Critical findings
 
@@ -286,6 +311,10 @@ Accessed 2026-07-21:
 - [Crawl4AI deep crawling](https://docs.crawl4ai.com/core/deep-crawling/)
 - [Scrapling documentation](https://scrapling.readthedocs.io/en/latest/)
 - [Crawlee documentation](https://crawlee.dev/)
+
+Runtime benchmark API accessed 2026-07-22:
+
+- [Firecrawl Scrape API](https://docs.firecrawl.dev/api-reference/endpoint/scrape)
 
 Vendor descriptions of success rate, scale, stealth, bypass, or reliability are
 vendor claims unless reproduced in the runtime benchmark above. Pricing and
