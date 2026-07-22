@@ -1,5 +1,9 @@
 """Normalized managed-acquisition provider contracts and native meter rules."""
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+import math
+import re
 from typing import Mapping, Protocol
 
 
@@ -22,6 +26,23 @@ class ProviderProtocolError(RuntimeError):
     """A provider reported an impossible native-meter reconciliation."""
 
     code = "provider_protocol_error"
+
+
+def parse_retry_after(value: str | None, *, limit: int = 3600) -> int | None:
+    """Normalize HTTP Retry-After to bounded seconds."""
+    if value is None:
+        return None
+    value = value.strip()
+    if re.fullmatch(r"[0-9]{1,10}", value):
+        return min(int(value), limit)
+    try:
+        retry_at = parsedate_to_datetime(value)
+        if retry_at.tzinfo is None:
+            return None
+        seconds = math.ceil((retry_at - datetime.now(timezone.utc)).total_seconds())
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    return min(max(seconds, 0), limit)
 
 
 @dataclass(frozen=True)

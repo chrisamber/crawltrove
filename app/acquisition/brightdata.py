@@ -1,16 +1,15 @@
 """One-request Bright Data Web Unlocker acquisition adapter."""
 import json
 import logging
-import math
 import re
 from collections.abc import Mapping
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
 
-from app.acquisition.providers import NativeCost, ProviderFailure, ProviderRequest, ProviderResult
+from app.acquisition.providers import (
+    NativeCost, ProviderFailure, ProviderRequest, ProviderResult, parse_retry_after,
+)
 from app.url_safety import UnsafeUrlError, ensure_public_url
 
 
@@ -20,7 +19,6 @@ _CHALLENGE_RE = re.compile(
     r"(?:captcha|recaptcha|hcaptcha|turnstile|cf-chl-|challenge-platform)", re.IGNORECASE,
 )
 _SAFE_RESPONSE_HEADERS = frozenset({"content-type", "content-length"})
-MAX_RETRY_AFTER_SECONDS = 60 * 60
 
 
 def redact_headers(headers: Mapping[str, str]) -> dict[str, str]:
@@ -48,23 +46,6 @@ def _failure(
         code, retryable, _cost(1 if request_sent else 0), status_code,
         retry_after_seconds,
     )
-
-
-def _retry_after_seconds(value: str | None) -> int | None:
-    """Parse bounded standard Retry-After values; malformed hints are ignored."""
-    if value is None:
-        return None
-    value = value.strip()
-    if re.fullmatch(r"[0-9]{1,10}", value):
-        return min(int(value), MAX_RETRY_AFTER_SECONDS)
-    try:
-        retry_at = parsedate_to_datetime(value)
-        if retry_at.tzinfo is None:
-            return None
-        seconds = math.ceil((retry_at - datetime.now(timezone.utc)).total_seconds())
-    except (TypeError, ValueError, IndexError, OverflowError):
-        return None
-    return min(max(seconds, 0), MAX_RETRY_AFTER_SECONDS)
 
 
 def _reported_payload(body: bytes, response_status: int) -> tuple[str, str | None, int | None]:
@@ -180,7 +161,7 @@ class BrightDataAdapter:
         if status_code == 429:
             return _failure(
                 "provider_rate_limited", True, status_code,
-                retry_after_seconds=_retry_after_seconds(headers.get("retry-after")),
+                retry_after_seconds=parse_retry_after(headers.get("retry-after")),
             )
         if status_code >= 500:
             return _failure("provider_failure", True, status_code)

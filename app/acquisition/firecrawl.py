@@ -10,7 +10,9 @@ from uuid import UUID
 
 import httpx
 
-from app.acquisition.providers import NativeCost, ProviderFailure, ProviderRequest, ProviderResult
+from app.acquisition.providers import (
+    NativeCost, ProviderFailure, ProviderRequest, ProviderResult, parse_retry_after,
+)
 from app.acquisition.sessions import SessionHandle, SessionSnapshot, SessionStateError
 from app.crawl.types import TaskResult
 from app.scraper import MAX_DOM_BYTES, WebScraper
@@ -154,7 +156,9 @@ class FirecrawlAdapter:
             ) as response:
                 status_code = response.status_code
                 if not 200 <= response.status_code < 300:
-                    failure = self._classify_response(response.status_code, credits)
+                    failure = self._classify_response(
+                        response.status_code, credits, response.headers.get("retry-after"),
+                    )
                 else:
                     content_length = response.headers.get("content-length")
                     if content_length and content_length.isdigit() and int(content_length) > MAX_DOM_BYTES:
@@ -175,13 +179,19 @@ class FirecrawlAdapter:
         return _data(bytes(body), status_code, credits, allow_empty=allow_empty)
 
     @staticmethod
-    def _classify_response(status_code: int, credits: int | float) -> ProviderFailure:
+    def _classify_response(
+        status_code: int, credits: int | float, retry_after: str | None = None,
+    ) -> ProviderFailure:
         if status_code in (401, 403):
             return _failure("provider_auth", False, status_code=status_code, credits=credits)
         if status_code == 402:
             return _failure("provider_billing", False, status_code=status_code, credits=credits)
         if status_code == 429:
-            return _failure("provider_rate_limited", True, status_code=status_code, credits=credits)
+            failure = _failure(
+                "provider_rate_limited", True, status_code=status_code, credits=credits,
+            )
+            failure.retry_after_seconds = parse_retry_after(retry_after)
+            return failure
         if status_code >= 500:
             return _failure("provider_failure", True, status_code=status_code, credits=credits)
         return _failure("provider_request", False, status_code=status_code, credits=credits)

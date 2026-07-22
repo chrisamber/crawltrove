@@ -79,6 +79,24 @@ async def test_firecrawl_errors_are_classified_and_never_include_api_key(public_
     await adapter.aclose()
 
 
+async def test_firecrawl_normalizes_retry_after(public_urls):
+    from app.acquisition.firecrawl import FirecrawlAdapter
+
+    adapter = FirecrawlAdapter(
+        "secret",
+        transport=RecordingTransport([
+            httpx.Response(429, headers={"retry-after": "9999999999"}),
+        ]),
+    )
+    with pytest.raises(ProviderFailure) as error:
+        await adapter.acquire(ProviderRequest(
+            url="https://example.com", route="firecrawl_scrape",
+            timeout_seconds=60, only_main_content=True,
+        ))
+    assert error.value.retry_after_seconds == 3600
+    await adapter.aclose()
+
+
 async def test_firecrawl_revalidates_provider_final_url(public_urls):
     from app.acquisition.firecrawl import FirecrawlAdapter
 
