@@ -29,3 +29,4 @@ class TaskResult:
     markdown: str
     metadata: Mapping[str, Any] = field(default_factory=dict)
     discovered_urls: tuple[str, ...] = ()
+    discovery_html: str = ""

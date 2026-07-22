@@ -1,6 +1,7 @@
 """Restricted database client used by enrolled remote workers."""
 import hashlib
 import json
+from types import SimpleNamespace
 from typing import Any, Optional
 from uuid import UUID
 
@@ -61,6 +62,24 @@ class RemoteRepository:
             return bool(await conn.fetchval(
                 "SELECT worker_api.reserve_browser_navigation($1,$2)",
                 task_id, lease_token,
+            ))
+
+    async def reserve_acquisition_attempt(self, task_id: UUID, lease_token: UUID,
+                                          route: str, reserved_cost: dict) -> Any:
+        async with self.pool.acquire() as conn:
+            attempt_id = await conn.fetchval(
+                "SELECT worker_api.reserve_provider_attempt($1,$2,$3,$4::jsonb)",
+                task_id, lease_token, route, json.dumps(reserved_cost),
+            )
+        return SimpleNamespace(id=attempt_id) if attempt_id is not None else None
+
+    async def finish_acquisition_attempt(self, attempt_id: UUID, lease_token: UUID,
+                                         outcome: str, actual_cost: dict, *,
+                                         cost_estimated: bool = False) -> bool:
+        async with self.pool.acquire() as conn:
+            return bool(await conn.fetchval(
+                "SELECT worker_api.finish_provider_attempt($1,$2,$3,$4::jsonb,$5)",
+                attempt_id, lease_token, outcome, json.dumps(actual_cost), cost_estimated,
             ))
 
     async def assign_proxy(self, task_id: UUID, lease_token: UUID, origin_key: str) -> Optional[dict]:

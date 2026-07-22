@@ -13,7 +13,11 @@ from types import MappingProxyType
 
 
 PROTOCOL_VERSION = 1
-VALID_CAPABILITIES = frozenset({"http", "browser", "proxy", "captcha"})
+VALID_CAPABILITIES = frozenset({
+    "http", "browser", "proxy", "captcha",
+    "firecrawl_scrape", "firecrawl_interact", "brightdata_unlocker",
+    "browserbase_session",
+})
 WORKER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 

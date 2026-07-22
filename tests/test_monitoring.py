@@ -44,6 +44,8 @@ async def test_health_reports_db_disabled(monkeypatch):
     assert body["status"] == "healthy"
     assert body["service"] == "crawltrove"
     assert body["db"] == "disabled"
+    assert set(body["providers"]) == {"local", "firecrawl", "brightdata", "browserbase"}
+    assert all(set(value) == {"state"} for value in body["providers"].values())
 
 
 @requires_db

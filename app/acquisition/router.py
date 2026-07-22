@@ -79,6 +79,7 @@ class AcquisitionRouter:
                 raise ProviderUnavailable("provider_budget_exhausted")
             result: ProviderResult | None = None
             failure: ProviderFailure | None = None
+            transition_to_static_block = False
             try:
                 if route == "owned_proxy_http" and isinstance(adapter, LocalAdapter):
                     result = await adapter.acquire_owned_proxy(
@@ -92,9 +93,13 @@ class AcquisitionRouter:
             except ProviderFailure as exc:
                 failure = exc
                 last_failure = exc
+                transition_to_static_block = (
+                    provider == "auto" and capability == "ordinary"
+                    and route == "local_http" and exc.code == "blocked_challenge"
+                )
                 if exc.code == "provider_protocol_error":
                     self._registry.unhealthy(adapter.name)
-                if not exc.retryable:
+                if not exc.retryable and not transition_to_static_block:
                     raise
             except UnsafeUrlError as exc:
                 failure = ProviderFailure("unsafe_final_url", False, reserved)
@@ -133,6 +138,8 @@ class AcquisitionRouter:
                             await adapter.cancel(result.remote_session_id)
                         except Exception:
                             pass
+            if transition_to_static_block:
+                return await self.acquire(task, capability="static_block")
             if failure is None or not failure.retryable:
                 break
         if last_failure is not None:
@@ -155,8 +162,9 @@ class AcquisitionRouter:
 
     @staticmethod
     def _capability(config: Mapping[str, Any], acquisition: Mapping[str, Any]) -> str:
-        if acquisition.get("allowHumanIntervention") is True:
-            return "interactive"
+        # Permission to open a durable human session is not a reason to create
+        # one. Interactive routes are entered only by the session lifecycle.
+        del acquisition
         return "rendering" if config.get("engine") == "browser" else "ordinary"
 
     def _normalize(self, result: ProviderResult, only_main_content: bool, engine: str) -> TaskResult:
@@ -169,4 +177,5 @@ class AcquisitionRouter:
             final_url=result.final_url, status_code=result.status_code,
             title=str(built.get("title", "")), markdown=str(built.get("markdown", "")),
             metadata=metadata if isinstance(metadata, Mapping) else {},
+            discovery_html=result.raw_html,
         )

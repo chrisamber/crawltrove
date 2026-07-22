@@ -1,4 +1,5 @@
 import asyncio
+import json
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -108,6 +109,42 @@ async def test_router_falls_back_only_after_a_retryable_failure(monkeypatch):
     assert result.markdown == "<p>ok</p>"
     assert [row[2] for row in repository.reserved] == ["local_browser", "firecrawl_scrape"]
     assert [row[2] for row in repository.finished] == ["retryable_failure", "succeeded"]
+
+
+async def test_local_challenge_transitions_once_to_static_block_routes(monkeypatch):
+    from app.acquisition.providers import NativeCost, ProviderFailure, ProviderResult
+    from app.acquisition.registry import ProviderRegistry
+    from app.acquisition.router import AcquisitionRouter
+
+    async def public(_url):
+        return None
+
+    monkeypatch.setattr("app.acquisition.router.ensure_public_url", public)
+    local = _Adapter(
+        "local", {"local_http", "owned_proxy_http"},
+        [
+            ProviderFailure("blocked_challenge", True, NativeCost({})),
+            ProviderFailure("blocked_challenge", True, NativeCost({})),
+        ], NativeCost({}),
+    )
+    brightdata = _Adapter(
+        "brightdata", {"brightdata_unlocker"},
+        [ProviderResult("<p>ok</p>", "https://example.com", 200, NativeCost({"requests": 1}))],
+        NativeCost({"requests": 1}),
+    )
+    repository = _Repository()
+    task = _router_task()
+    task.config["acquisition"]["allowHumanIntervention"] = True
+    result = await AcquisitionRouter(
+        ProviderRegistry({"local": local, "brightdata": brightdata}), repository, _Scraper(),
+    ).acquire(task)
+
+    assert result.markdown == "<p>ok</p>"
+    assert local.calls == ["local_http", "owned_proxy_http"]
+    assert brightdata.calls == ["brightdata_unlocker"]
+    assert [row[2] for row in repository.reserved] == [
+        "local_http", "owned_proxy_http", "brightdata_unlocker",
+    ]
 
 
 async def test_router_finishes_before_cancelling_ephemeral_remote_result(monkeypatch):
@@ -272,6 +309,111 @@ async def test_provider_finish_is_fenced_and_reconciles_exact_meters(db):
         )
     assert (usage["reserved_value"], usage["consumed_value"]) == (0, 1)
     assert attempts == 2
+
+
+@requires_db
+async def test_abandoned_provider_reservation_is_conservatively_reconciled_on_cancel(db):
+    from app.crawl import repository
+
+    job_id, task = await _claimed_provider_task(firecrawl_credits=2)
+    attempt = await repository.reserve_acquisition_attempt(
+        task.id, task.lease_token, "firecrawl_scrape", {"credits": 2},
+    )
+    assert attempt is not None
+    assert await repository.request_cancel(job_id)
+    async with db.acquire() as conn:
+        usage = await conn.fetchrow(
+            "SELECT reserved_value, consumed_value FROM crawl_provider_usage "
+            "WHERE job_id = $1 AND provider = 'firecrawl' AND meter = 'credits'", job_id,
+        )
+        abandoned = await conn.fetchrow(
+            "SELECT outcome, error_code, actual_cost, cost_estimated "
+            "FROM acquisition_attempts WHERE id = $1", attempt.id,
+        )
+    assert (usage["reserved_value"], usage["consumed_value"]) == (0, 2)
+    actual = abandoned["actual_cost"]
+    actual = json.loads(actual) if isinstance(actual, str) else dict(actual)
+    assert actual == {"credits": 2}
+    assert abandoned["outcome"] == "abandoned"
+    assert abandoned["error_code"] == "lease_inactive"
+    assert abandoned["cost_estimated"] is True
+
+
+@requires_db
+async def test_abandoned_provider_reservation_is_reconciled_on_lease_expiry(db):
+    from app.crawl import repository
+
+    job_id, task = await _claimed_provider_task(firecrawl_credits=1)
+    attempt = await repository.reserve_acquisition_attempt(
+        task.id, task.lease_token, "firecrawl_scrape", {"credits": 1},
+    )
+    assert attempt is not None
+    async with db.acquire() as conn:
+        await conn.execute(
+            "UPDATE crawl_tasks SET lease_expires_at = now() - interval '1 second' WHERE id = $1",
+            task.id,
+        )
+    assert await repository.reap_expired_leases() == 1
+    async with db.acquire() as conn:
+        usage = await conn.fetchrow(
+            "SELECT reserved_value, consumed_value FROM crawl_provider_usage "
+            "WHERE job_id = $1 AND provider = 'firecrawl' AND meter = 'credits'", job_id,
+        )
+        outcome = await conn.fetchval("SELECT outcome FROM acquisition_attempts WHERE id = $1", attempt.id)
+    assert (usage["reserved_value"], usage["consumed_value"]) == (0, 1)
+    assert outcome == "abandoned"
+
+
+@requires_db
+async def test_remote_provider_rpc_rejects_missing_extra_and_invalid_native_meters(db):
+    import asyncpg
+    from app.crawl import repository
+
+    job_id = await repository.submit_job(CrawlConfig(
+        url="https://example.com", minDelayMs=0,
+        acquisition=AcquisitionConfig(
+            provider="firecrawl",
+            creditBudgets=CreditBudgets(firecrawl=FirecrawlBudget(credits=2)),
+        ),
+    ))
+    worker_id = "provider-meter-test"
+    async with db.acquire() as conn:
+        role = await conn.fetchval("SELECT session_user")
+        assert await conn.fetchval("SELECT id FROM workers WHERE db_role = $1", role) is None
+        await conn.execute(
+            """INSERT INTO workers (id, db_role, capabilities, protocol_version, state,
+                                      artifact_bucket, artifact_prefix)
+               VALUES ($1, $2, ARRAY['firecrawl_scrape'], 1, 'active', 'bucket', $3)""",
+            worker_id, role, f"workers/{worker_id}/",
+        )
+        try:
+            claim = await conn.fetchrow(
+                "SELECT * FROM worker_api.claim(ARRAY['firecrawl_scrape']::TEXT[])"
+            )
+            assert claim is not None and claim["job_id"] == job_id
+            for cost in ({}, {"credits": 1, "unexpected": 1}, {"credits": -1}):
+                with pytest.raises(asyncpg.PostgresError, match="invalid provider native cost"):
+                    await conn.fetchval(
+                        "SELECT worker_api.reserve_provider_attempt($1,$2,'firecrawl_scrape',$3::jsonb)",
+                        claim["id"], claim["lease_token"], json.dumps(cost),
+                    )
+            attempt_id = await conn.fetchval(
+                "SELECT worker_api.reserve_provider_attempt($1,$2,'firecrawl_scrape',$3::jsonb)",
+                claim["id"], claim["lease_token"], json.dumps({"credits": 1}),
+            )
+            assert attempt_id is not None
+            for actual in ({}, {"credits": 1, "unexpected": 1}, {"credits": -1}):
+                with pytest.raises(asyncpg.PostgresError):
+                    await conn.fetchval(
+                        "SELECT worker_api.finish_provider_attempt($1,$2,'succeeded',$3::jsonb,FALSE)",
+                        attempt_id, claim["lease_token"], json.dumps(actual),
+                    )
+            assert await conn.fetchval(
+                "SELECT worker_api.finish_provider_attempt($1,$2,'succeeded',$3::jsonb,FALSE)",
+                attempt_id, claim["lease_token"], json.dumps({"credits": 1}),
+            ) is True
+        finally:
+            await conn.execute("DELETE FROM workers WHERE id = $1", worker_id)
 
 
 @requires_db

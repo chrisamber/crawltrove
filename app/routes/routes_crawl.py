@@ -5,7 +5,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 from app.crawl import repository
 from app.crawl.config import CrawlConfig
 from app.crawl.repository import PersistenceUnavailable
-from app.crawl.service import crawl_service
+from app.crawl.service import ProviderBudgetInvalid, crawl_service
+from app.acquisition.registry import ProviderUnavailable
 from app.services import crawler
 from app.url_safety import UnsafeUrlError
 
@@ -45,6 +46,14 @@ async def submit(config: CrawlConfig):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except PersistenceUnavailable as exc:
         raise _unavailable() from exc
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail={
+            "code": "provider_unavailable", "message": "Requested provider is unavailable",
+        }) from exc
+    except ProviderBudgetInvalid as exc:
+        raise HTTPException(status_code=422, detail={
+            "code": "provider_budget_invalid", "message": str(exc),
+        }) from exc
     return {"success": True, "jobId": str(job_id)}
 
 

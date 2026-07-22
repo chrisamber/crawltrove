@@ -13,6 +13,8 @@ from typing import Any
 
 from app.crawl.worker import CrawlWorker
 from app.acquisition.proxy import RemoteProxyPool
+from app.acquisition.registry import env_registry
+from app.acquisition.router import AcquisitionRouter
 from app.artifacts.base import ArtifactIntegrityError
 from app.scraper import WebScraper
 from app.worker_config import WorkerConfig
@@ -112,9 +114,22 @@ class WorkerRuntime:
         monitored_repository = _HeartbeatRepository(artifact_repository, self)
         proxy_pool = (RemoteProxyPool.from_environment(monitored_repository)
                       if "proxy" in config.capabilities else None)
+        allowed_routes = {"local_http"}
+        if "browser" in config.capabilities:
+            allowed_routes.add("local_browser")
+        if proxy_pool is not None:
+            allowed_routes.add("owned_proxy_http")
+        allowed_routes.update(set(config.capabilities) & {
+            "firecrawl_scrape", "firecrawl_interact", "brightdata_unlocker",
+            "browserbase_session",
+        })
+        self.registry = env_registry(
+            self.scraper, proxy_pool=proxy_pool, allowed_routes=allowed_routes,
+        )
         self.worker = worker or CrawlWorker(
             config.worker_id, set(config.capabilities), monitored_repository, self.scraper,
             proxy_pool=proxy_pool,
+            acquisition_router=AcquisitionRouter(self.registry, monitored_repository, self.scraper),
         )
 
     async def tick(self) -> bool:
@@ -145,7 +160,8 @@ class WorkerRuntime:
         self._next_registration_at = now + 30
         try:
             registration = await self.repository.register(
-                self.config.protocol_version, set(self.config.capabilities),
+                self.config.protocol_version,
+                set(getattr(self.worker, "capabilities", self.config.capabilities)),
             )
         except Exception:
             self._database = "down"
@@ -294,6 +310,7 @@ class WorkerRuntime:
             result = close()
             if asyncio.iscoroutine(result):
                 await result
+        await self.registry.aclose()
 
 
 async def _main(config_path: str) -> None:

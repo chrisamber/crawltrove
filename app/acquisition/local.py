@@ -16,6 +16,10 @@ class LocalAdapter:
         self.scraper = scraper
         self._proxy_pool = proxy_pool
 
+    def set_proxy_pool(self, proxy_pool: Any | None) -> None:
+        """Install the initialized pool without rebuilding provider clients."""
+        self._proxy_pool = proxy_pool
+
     def available(self) -> bool:
         return True
 

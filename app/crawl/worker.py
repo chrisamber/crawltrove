@@ -16,7 +16,8 @@ class CrawlWorker:
     def __init__(self, worker_id: str, capabilities: set[str], repository: Any,
                  scraper: Any, *, heartbeat_seconds: float = 30,
                  discover: Callable = discover_links, robots_fetch: Callable = fetch.fetch_http,
-                 robots_sleep: Callable = asyncio.sleep, proxy_pool: Any = None):
+                 robots_sleep: Callable = asyncio.sleep, proxy_pool: Any = None,
+                 acquisition_router: Any = None):
         self.worker_id = worker_id
         self.capabilities = capabilities
         self.repository = repository
@@ -26,6 +27,7 @@ class CrawlWorker:
         self.robots_fetch = robots_fetch
         self.robots_sleep = robots_sleep
         self.proxy_pool = proxy_pool
+        self.acquisition_router = acquisition_router
         self.active_lease: tuple[Any, Any] | None = None
         self.active_proxy_lease: Any | None = None
 
@@ -84,7 +86,17 @@ class CrawlWorker:
                 # Proxy workers never fall back to ambient or direct proxy settings.
                 scrape_options["proxy"] = proxy_lease.playwright_proxy()
                 scrape_options["trust_env"] = False
-            scrape_task = asyncio.create_task(self.scraper.scrape(task.url, **scrape_options))
+            if self.acquisition_router is None:
+                scrape_task = asyncio.create_task(self.scraper.scrape(task.url, **scrape_options))
+            else:
+                async def acquire():
+                    result = await self.acquisition_router.acquire(task)
+                    return {
+                        "success": True, "url": result.final_url, "title": result.title,
+                        "markdown": result.markdown, "metadata": dict(result.metadata),
+                        "discovery_html": result.discovery_html,
+                    }
+                scrape_task = asyncio.create_task(acquire())
             lease_wait = asyncio.create_task(lease_lost.wait())
             done, _ = await asyncio.wait(
                 {scrape_task, lease_wait}, timeout=timeout,

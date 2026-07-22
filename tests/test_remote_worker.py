@@ -124,6 +124,27 @@ async def test_lost_heartbeat_discards_result(insecure_config):
     assert runtime.readiness()["database"] == "down"
 
 
+async def test_remote_worker_enables_only_enrolled_managed_routes(insecure_config, monkeypatch):
+    from app.acquisition.router import AcquisitionRouter
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-key")
+    config = WorkerConfig.from_mapping({
+        "workerId": "edge-1", "databaseUrl": "postgresql://edge@db/crawl",
+        "capabilities": ["http", "firecrawl_scrape"], "protocolVersion": 1,
+        "artifactPrefix": "workers/edge-1/",
+    })
+    runtime = WorkerRuntime(config, FakeRepository(), FakeArtifacts())
+    try:
+        assert isinstance(runtime.worker.acquisition_router, AcquisitionRouter)
+        assert runtime.registry.route_available("local_http") is True
+        assert runtime.registry.route_available("firecrawl_scrape") is True
+        assert runtime.registry.route_available("firecrawl_interact") is False
+        assert runtime.registry.route_available("brightdata_unlocker") is False
+        assert "firecrawl_scrape" in runtime.worker.capabilities
+    finally:
+        await runtime.close()
+
+
 async def test_health_server_reports_ready_and_live(insecure_config):
     repository = FakeRepository()
     runtime = WorkerRuntime(insecure_config, repository, FakeArtifacts(), worker=FakeWorker(repository))

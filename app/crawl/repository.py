@@ -77,6 +77,21 @@ def _provider_usage_rows(config: CrawlConfig) -> tuple[tuple[str, str, int | flo
     return tuple(rows)
 
 
+def _required_capabilities(config: Mapping[str, Any]) -> list[str]:
+    """Pin an explicit managed provider to an enrolled route-capable worker."""
+    acquisition = config.get("acquisition")
+    provider = acquisition.get("provider") if isinstance(acquisition, Mapping) else "auto"
+    explicit_routes = {
+        "firecrawl": "firecrawl_scrape",
+        "brightdata": "brightdata_unlocker",
+        "browserbase": "browserbase_session",
+    }
+    route = explicit_routes.get(provider)
+    if route is not None:
+        return [route]
+    return ["browser"] if config.get("engine") == "browser" else ["http"]
+
+
 def _native_cost(route: str, values: Any) -> tuple[str, dict[str, int | float]]:
     """Reject ambiguous or impossible native meter values before a DB write."""
     try:
@@ -163,7 +178,7 @@ async def submit_job(
                                $8::TEXT[])""",
                     task_id, job_id, config.url, normalized, url_hash, origin_key,
                     config.acquisition.maxAttempts,
-                    ["browser"] if config.engine == "browser" else ["http"],
+                    _required_capabilities(config.model_dump()),
                 )
                 await conn.execute(
                     "INSERT INTO crawl_origins (origin_key) VALUES ($1) "
@@ -218,6 +233,25 @@ async def get_job(job_id: UUID) -> Optional[dict]:
             job_id,
         )
         job["errors"] = [dict(row) for row in error_rows]
+        attempts = await conn.fetch(
+            """SELECT id, route, provider, outcome, block_reason, error_code, duration_ms,
+                      actual_cost, started_at, finished_at FROM acquisition_attempts
+               WHERE job_id = $1 ORDER BY started_at, id""", job_id,
+        )
+        job["attempts"] = [{
+            "id": str(row["id"]), "route": row["route"], "provider": row["provider"],
+            "outcome": row["outcome"], "blockReason": row["block_reason"],
+            "errorCode": row["error_code"], "durationMs": row["duration_ms"],
+            "nativeUsage": _loads(row["actual_cost"]), "startedAt": row["started_at"],
+            "finishedAt": row["finished_at"],
+        } for row in attempts]
+        usage = await conn.fetch(
+            """SELECT provider, meter, limit_value, reserved_value, consumed_value
+               FROM crawl_provider_usage WHERE job_id = $1 ORDER BY provider, meter""", job_id,
+        )
+        job["usage"] = [{"provider": row["provider"], "meter": row["meter"],
+                         "limit": float(row["limit_value"]), "reserved": float(row["reserved_value"]),
+                         "consumed": float(row["consumed_value"])} for row in usage]
         return job
 
 
@@ -262,6 +296,7 @@ async def request_cancel(job_id: UUID) -> bool:
                     "WHERE id = $1",
                     row["run_id"],
                 )
+            await _reconcile_abandoned_acquisition_attempts(conn)
             await _event(conn, job_id, None, "job_cancel_requested", {})
             return row is not None
 
@@ -722,14 +757,61 @@ async def _terminalize(
 async def _reject_inactive_lease(conn: Any, task: Any) -> bool:
     if task["cancel_requested_at"] is not None:
         await _terminalize(conn, task, "cancelled")
+        await _reconcile_abandoned_acquisition_attempts(conn, task_id=task["id"])
         return True
     if task["deadline_expired"]:
         await _terminalize(
             conn, task, "permanent_failed", error_class="policy",
             error_code="deadline_exceeded",
         )
+        await _reconcile_abandoned_acquisition_attempts(conn, task_id=task["id"])
         return True
     return False
+
+
+async def _reconcile_abandoned_acquisition_attempts(
+    conn: Any, *, task_id: UUID | None = None,
+) -> int:
+    """Conservatively consume native reservations once their lease is no longer valid."""
+    attempts = await conn.fetch(
+        """SELECT a.*
+           FROM acquisition_attempts a
+           JOIN crawl_tasks t ON t.id = a.task_id
+           JOIN crawl_jobs j ON j.id = a.job_id
+           WHERE a.finished_at IS NULL AND a.lease_token IS NOT NULL
+             AND ($1::UUID IS NULL OR a.task_id = $1)
+             AND (t.state <> 'leased' OR t.lease_token IS DISTINCT FROM a.lease_token
+                  OR t.lease_expires_at <= now() OR j.cancel_requested_at IS NOT NULL
+                  OR j.deadline_at <= now())
+           FOR UPDATE OF a, t, j SKIP LOCKED""",
+        task_id,
+    )
+    reconciled = 0
+    for attempt in attempts:
+        provider, reserved = _native_cost(attempt["route"], _loads(attempt["reserved_cost"]))
+        if provider != "local":
+            for meter, value in reserved.items():
+                updated = await conn.fetchval(
+                    """UPDATE crawl_provider_usage
+                       SET reserved_value = reserved_value - $4,
+                           consumed_value = consumed_value + $4
+                       WHERE job_id = $1 AND provider = $2 AND meter = $3
+                       RETURNING TRUE""",
+                    attempt["job_id"], provider, meter, Decimal(str(value)),
+                )
+                if not updated:
+                    raise ProviderProtocolError("provider usage meter is missing")
+        await conn.execute(
+            """UPDATE acquisition_attempts
+               SET finished_at = now(),
+                   duration_ms = EXTRACT(EPOCH FROM now() - started_at) * 1000,
+                   actual_cost = $2::jsonb, outcome = 'abandoned',
+                   error_code = 'lease_inactive', cost_estimated = TRUE
+               WHERE id = $1 AND finished_at IS NULL""",
+            attempt["id"], json.dumps(reserved),
+        )
+        reconciled += 1
+    return reconciled
 
 
 async def claim_task(
@@ -877,7 +959,7 @@ async def _insert_discovered(conn: Any, task: Any, urls: tuple[str, ...]) -> int
         return 0
     sequence = task["next_discovery_seq"]
     accepted = 0
-    capabilities = ["browser"] if config.get("engine") == "browser" else ["http"]
+    capabilities = _required_capabilities(config)
     for original in urls:
         if accepted >= remaining:
             break
@@ -1148,6 +1230,7 @@ async def reap_expired_leases() -> int:
     reaped = 0
     async with pool.acquire() as conn:
         async with conn.transaction():
+            await _reconcile_abandoned_acquisition_attempts(conn)
             expired = await conn.fetch(
                 """SELECT id, lease_token FROM crawl_tasks
                    WHERE state = 'leased' AND lease_expires_at <= now()

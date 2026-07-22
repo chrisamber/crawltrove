@@ -134,6 +134,81 @@ async def test_status_preserves_one_release_legacy_resume_bridge(monkeypatch):
     assert response.json()["status"] == "processing"
 
 
+@requires_db
+async def test_explicit_provider_budget_is_rejected_before_job_insert(db, monkeypatch):
+    from app.crawl import service
+    from app.main import app
+
+    monkeypatch.setattr(service.crawl_service.registry, "require_available", lambda _provider: None)
+    async def public_url(_url):
+        return ()
+    monkeypatch.setattr(service, "ensure_public_url", public_url)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post("/api/crawl", json={
+            "url": "https://example.com",
+            "timeoutSeconds": 30,
+            "acquisition": {
+                "provider": "browserbase",
+                "creditBudgets": {
+                    "browserbase": {"browserMinutes": 1, "proxyBytes": 0},
+                },
+            },
+        })
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "provider_budget_invalid"
+    async with db.acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM crawl_jobs") == 0
+
+
+@requires_db
+async def test_status_exposes_only_safe_provider_attempt_and_usage_fields(db):
+    from app.crawl import repository
+    from app.crawl.config import (
+        AcquisitionConfig, CreditBudgets, CrawlConfig, FirecrawlBudget,
+    )
+    from app.main import app
+
+    job_id = await repository.submit_job(CrawlConfig(
+        url="https://example.com", minDelayMs=0,
+        acquisition=AcquisitionConfig(
+            creditBudgets=CreditBudgets(firecrawl=FirecrawlBudget(credits=2)),
+        ),
+    ))
+    task = await repository.claim_task("safe-api-worker", {"http"})
+    assert task is not None
+    attempt = await repository.reserve_acquisition_attempt(
+        task.id, task.lease_token, "firecrawl_scrape", {"credits": 1},
+    )
+    assert attempt is not None
+    assert await repository.finish_acquisition_attempt(
+        attempt.id, task.lease_token, "succeeded", {"credits": 1},
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(f"/api/crawl/{job_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    managed = next(item for item in body["attempts"] if item["id"] == str(attempt.id))
+    assert set(managed) == {
+        "id", "route", "provider", "outcome", "blockReason", "errorCode",
+        "durationMs", "nativeUsage", "startedAt", "finishedAt",
+    }
+    assert managed["nativeUsage"] == {"credits": 1}
+    assert body["usage"] == [{
+        "provider": "firecrawl", "meter": "credits", "limit": 2.0,
+        "reserved": 0.0, "consumed": 1.0,
+    }]
+    serialized = response.text.lower()
+    for forbidden in ("lease_token", "api_key", "remote_session", "connecturl", "wsurl"):
+        assert forbidden not in serialized
+
+
 async def test_scheduled_crawl_returns_compatibility_run_id(monkeypatch):
     from app import runner
 

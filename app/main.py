@@ -378,7 +378,8 @@ async def health_check():
     else:
         db_state = "up" if await pool.ping() else "down"
     return {"status": "healthy", "service": "crawltrove",
-            "version": VERSION, "db": db_state}
+            "version": VERSION, "db": db_state,
+            "providers": crawl_service.registry.health()}
 
 @app.post("/api/scrape")
 async def scrape_url(request: ScrapeRequest):

@@ -1,4 +1,5 @@
 import asyncio
+import math
 import os
 from typing import Optional
 
@@ -7,6 +8,12 @@ from app.crawl.config import CrawlConfig
 from app.crawl.worker import CrawlWorker
 from app.services import scraper
 from app.url_safety import ensure_public_url
+from app.acquisition.registry import env_registry
+from app.acquisition.router import AcquisitionRouter
+
+
+class ProviderBudgetInvalid(ValueError):
+    """The selected provider cannot run within the submitted native budget."""
 
 
 class CrawlService:
@@ -20,12 +27,42 @@ class CrawlService:
         )
         self._worker_task = None
         self._maintenance_task = None
+        self.registry = env_registry(scraper)
+        self._worker.acquisition_router = AcquisitionRouter(self.registry, repository, scraper)
+        self._add_available_route_capabilities()
+
+    def _add_available_route_capabilities(self) -> None:
+        capabilities = getattr(self._worker, "capabilities", None)
+        if capabilities is None:
+            return
+        capabilities.update(self.registry.available_routes("auto"))
 
     async def submit_crawl(self, config: CrawlConfig, *,
                            idempotency_key: str | None = None,
                            definition_job_id: int | None = None,
                            trigger: str = "manual"):
         await repository.require_pool()
+        provider = config.acquisition.provider
+        if provider != "auto" and provider != "local":
+            self.registry.require_available(provider)
+            budgets = config.acquisition.creditBudgets
+            if provider == "firecrawl" and (
+                budgets.firecrawl is None or budgets.firecrawl.credits < 1
+            ):
+                raise ProviderBudgetInvalid("firecrawl credit budget must be at least 1")
+            if provider == "brightdata" and (
+                budgets.brightdata is None or budgets.brightdata.requests < 1
+            ):
+                raise ProviderBudgetInvalid("brightdata request budget must be at least 1")
+            if provider == "browserbase":
+                required = math.ceil(config.timeoutSeconds / 60)
+                if (config.timeoutSeconds < 60 or budgets.browserbase is None
+                        or budgets.browserbase.proxyBytes != 0
+                        or budgets.browserbase.browserMinutes < required):
+                    raise ProviderBudgetInvalid(
+                        "browserbase requires timeoutSeconds>=60, proxyBytes=0, "
+                        "and sufficient browserMinutes"
+                    )
         await ensure_public_url(config.url)
         job_id = await repository.submit_job(
             config, idempotency_key=idempotency_key,
@@ -46,7 +83,9 @@ class CrawlService:
                 self._worker.proxy_pool = ProxyPool.from_environment(
                     await repository.require_pool(),
                 )
+                self.registry.set_proxy_pool(self._worker.proxy_pool)
                 self._worker.capabilities.add("proxy")
+                self._add_available_route_capabilities()
             self._worker_task = asyncio.create_task(self._run_worker())
         self._maintenance_task = asyncio.create_task(self._run_maintenance())
 
@@ -58,6 +97,7 @@ class CrawlService:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        await self.registry.aclose()
 
     async def _run_worker(self) -> None:
         while True:
