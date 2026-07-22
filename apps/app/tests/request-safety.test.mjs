@@ -13,7 +13,7 @@ test("page limits stay within the backend contract", () => {
   assert.equal(normalizePageLimit(Number.NaN), 25);
   assert.equal(normalizePageLimit(0), 1);
   assert.equal(normalizePageLimit(12.9), 12);
-  assert.equal(normalizePageLimit(900), 500);
+  assert.equal(normalizePageLimit(900), 100);
 });
 
 test("abort errors are identified without hiding ordinary failures", () => {
@@ -22,13 +22,14 @@ test("abort errors are identified without hiding ordinary failures", () => {
   assert.equal(isAbortError(null), false);
 });
 
-test("restored interrupted crawls stop client polling", () => {
+test("durable crawl caps and terminal states", () => {
   assert.equal(isTerminalCrawlStatus("completed"), true);
   assert.equal(isTerminalCrawlStatus("partial"), true);
   assert.equal(isTerminalCrawlStatus("failed"), true);
   assert.equal(isTerminalCrawlStatus("cancelled"), true);
   assert.equal(isTerminalCrawlStatus("timed_out"), true);
-  assert.equal(isTerminalCrawlStatus("interrupted"), true);
+  assert.equal(isTerminalCrawlStatus("waiting_input"), false);
+  assert.equal(isTerminalCrawlStatus("interrupted"), false);
   assert.equal(isTerminalCrawlStatus("running"), false);
 });
 

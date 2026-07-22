@@ -9,7 +9,7 @@ export function isAbortError(error: unknown) {
 
 export function normalizePageLimit(value: number) {
   if (!Number.isFinite(value)) return 25;
-  return Math.min(500, Math.max(1, Math.trunc(value)));
+  return Math.min(100, Math.max(1, Math.trunc(value)));
 }
 
 const TERMINAL_CRAWL_STATUSES = new Set([
@@ -18,7 +18,6 @@ const TERMINAL_CRAWL_STATUSES = new Set([
   "failed",
   "cancelled",
   "timed_out",
-  "interrupted",
 ]);
 
 export function isTerminalCrawlStatus(status: string) {

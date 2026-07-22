@@ -31,12 +31,16 @@ const semanticStatus: Record<string, StatusTone> = {
   up: "success",
   active: "info",
   running: "info",
+  leased: "info",
+  retry_wait: "info",
   crawling: "info",
   pending: "warning",
   queued: "warning",
-  interrupted: "warning",
+  partial: "warning",
+  waiting_input: "warning",
   down: "error",
   failed: "error",
+  timed_out: "error",
   error: "error",
   cancelled: "neutral",
   disabled: "neutral",
@@ -47,6 +51,7 @@ export function StatusBadge({ status, tone, className }: { status: string; tone?
   return (
     <Badge
       variant="outline"
+      aria-label={`Status: ${status}. ${resolved} tone.`}
       className={cn("h-5 rounded-[5px] px-1.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em]", statusTones[resolved], className)}
     >
       {status}

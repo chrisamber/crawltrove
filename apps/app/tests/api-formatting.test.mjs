@@ -53,3 +53,11 @@ test("inline crawl Markdown is rendered in discovery order", () => {
     "# https://example.com/docs\n\nDocumentation",
   );
 });
+
+test("closed durable crawl types preserve known acquisition route fields", async () => {
+  const source = await import("node:fs/promises");
+  const apiSource = await source.readFile(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+  assert.match(apiSource, /export type AcquisitionRoute/);
+  assert.match(apiSource, /"brightdata_unlocker"/);
+  assert.doesNotMatch(apiSource, /\[key: string\]: unknown/);
+});
