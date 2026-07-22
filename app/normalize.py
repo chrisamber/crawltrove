@@ -14,20 +14,158 @@ raises**, no imports of dedup/storage/DB (so it stays trivially testable and
 safe to call from any path). content_hash for records is left None here; the
 caller computes it (it owns the dedup index).
 """
-from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
+import ipaddress
+import re
+from typing import Any, Collection, Dict, List, Optional
+from urllib.parse import unquote_plus, urlsplit, urlunsplit
 
 
-def normalize_url(url: str) -> str:
-    """Canonical URL identity: lowercase host, no trailing slash, no fragment,
-    query preserved (it is often part of page identity — search/pagination)."""
+MAX_URL_BYTES = 4096
+_UNRESERVED = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
+)
+_PERCENT_ESCAPE = re.compile(r"%([0-9a-fA-F]{2})")
+
+
+def _normalize_percent_encoding(value: str) -> str:
+    """Decode unreserved characters and uppercase every other valid escape."""
+    def replace(match: re.Match[str]) -> str:
+        byte = int(match.group(1), 16)
+        character = chr(byte)
+        if character in _UNRESERVED:
+            return character
+        return f"%{byte:02X}"
+
+    return _PERCENT_ESCAPE.sub(replace, value)
+
+
+def _remove_dot_segments(path: str) -> str:
+    """Resolve RFC 3986 dot segments without changing path case."""
+    def remove_last_segment(value: str) -> str:
+        boundary = value.rfind("/")
+        return value[:boundary] if boundary >= 0 else ""
+
+    remaining = path
+    output = ""
+    while remaining:
+        if remaining.startswith("../"):
+            remaining = remaining[3:]
+        elif remaining.startswith("./"):
+            remaining = remaining[2:]
+        elif remaining.startswith("/./"):
+            remaining = "/" + remaining[3:]
+        elif remaining == "/.":
+            remaining = "/"
+        elif remaining.startswith("/../"):
+            remaining = "/" + remaining[4:]
+            output = remove_last_segment(output)
+        elif remaining == "/..":
+            remaining = "/"
+            output = remove_last_segment(output)
+        elif remaining in (".", ".."):
+            remaining = ""
+        else:
+            boundary = remaining.find("/", 1 if remaining.startswith("/") else 0)
+            if boundary < 0:
+                output += remaining
+                remaining = ""
+            else:
+                output += remaining[:boundary]
+                remaining = remaining[boundary:]
+    return output
+
+
+def _normalized_host(host: str) -> Optional[str]:
+    host = host.rstrip(".").lower()
+    if not host:
+        return None
     try:
-        parsed = urlparse(url or "")
-        path = parsed.path.rstrip("/")
-        query = f"?{parsed.query}" if parsed.query else ""
-        return f"{parsed.scheme}://{parsed.netloc.lower()}{path}{query}"
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            return host.encode("idna").decode("ascii").lower()
+        except UnicodeError:
+            return None
+    return address.compressed
+
+
+def _serialized_host(host: str) -> str:
+    return f"[{host}]" if ":" in host else host
+
+
+def normalize_url(
+    url: str,
+    *,
+    tracking_parameters: Optional[Collection[str]] = None,
+) -> str:
+    """Return a deterministic URL identity without changing query semantics.
+
+    Invalid inputs remain total and return a string. URLs that parse as absolute
+    URLs but exceed the crawl identity limit return an empty string so callers
+    cannot enqueue them. Tracking keys are removed only when the operator passes
+    an explicit collection; remaining parameters keep their order and repeats.
+
+    The root and trailing-slash serialization intentionally preserves the
+    pre-v0.4 identity used by checkpoints and change tracking.
+    """
+    original = "" if url is None else str(url)
+    if not original:
+        return ""
+    try:
+        if len(original.encode("utf-8")) > MAX_URL_BYTES:
+            return ""
+    except UnicodeError:
+        return ""
+    try:
+        parsed = urlsplit(original)
+        scheme = parsed.scheme.lower()
+        host = _normalized_host(parsed.hostname or "")
+        if not scheme or host is None:
+            return original
+        port = parsed.port
+
+        netloc = _serialized_host(host)
+        default_port = (
+            443 if scheme == "https" else 80 if scheme == "http" else None
+        )
+        if port is not None and port != default_port:
+            netloc = f"{netloc}:{port}"
+
+        path = _remove_dot_segments(_normalize_percent_encoding(parsed.path or "/"))
+        # Existing public identity treats `/x` and `/x/`, and the two root
+        # spellings, as the same page. Keep that compatibility for old artifacts.
+        path = path.rstrip("/")
+
+        query_parts = parsed.query.split("&") if parsed.query else []
+        ignored = {str(name).casefold() for name in (tracking_parameters or ())}
+        if ignored:
+            query_parts = [
+                part for part in query_parts
+                if unquote_plus(part.partition("=")[0]).casefold() not in ignored
+            ]
+        query = _normalize_percent_encoding("&".join(query_parts))
+
+        normalized = urlunsplit((scheme, netloc, path, query, ""))
+        if len(normalized.encode("utf-8")) > MAX_URL_BYTES:
+            return ""
+        return normalized
     except Exception:
-        return url or ""
+        return original
+
+
+def origin_key(url: str) -> str:
+    """Return `scheme://idna-host:effective-port` for an HTTP(S) URL."""
+    try:
+        normalized = normalize_url(url)
+        parsed = urlsplit(normalized)
+        scheme = parsed.scheme.lower()
+        host = _normalized_host(parsed.hostname or "")
+        if scheme not in ("http", "https") or host is None:
+            return ""
+        port = parsed.port or (443 if scheme == "https" else 80)
+        return f"{scheme}://{_serialized_host(host)}:{port}"
+    except Exception:
+        return ""
 
 
 def page_row_from_result(

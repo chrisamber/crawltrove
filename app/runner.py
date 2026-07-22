@@ -14,8 +14,11 @@ import logging
 from typing import Any, Dict, Optional
 
 from app import changes, dedup, normalize, storage, vecindex
+from app.crawl import repository as crawl_repository
+from app.crawl.config import CrawlConfig
+from app.crawl.service import submit_crawl
 from app.db import repo
-from app.services import scraper, crawler
+from app.services import scraper
 
 logger = logging.getLogger("runner")
 
@@ -116,8 +119,32 @@ def _crawl_params(params: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _crawl_config(params: Dict[str, Any]) -> Dict[str, Any]:
+    values = _crawl_params(params)
+    return {
+        "limit": values["limit"],
+        "maxDepth": values["max_depth"],
+        "onlyMainContent": values["only_main_content"],
+        "engine": values["engine"],
+        "useSitemap": values["use_sitemap"],
+        "screenshots": params.get("screenshots", False),
+    }
+
+
 async def launch_job(def_row: Dict[str, Any], trigger: str = "manual") -> Optional[int]:
     """Create a run for a job definition and dispatch it. Returns the run id."""
+    if (def_row.get("kind") or "scrape").lower() == "crawl":
+        target_url = def_row.get("target_url")
+        if not target_url:
+            return None
+        config = CrawlConfig.model_validate({
+            "url": target_url, **_crawl_config(def_row.get("params") or {}),
+        })
+        crawl_id = await submit_crawl(
+            config, definition_job_id=def_row.get("id"), trigger=trigger,
+        )
+        durable = await crawl_repository.get_job(crawl_id)
+        return durable.get("run_id") if durable else None
     run_id = await repo.record_run_start(
         job_id=def_row.get("id"), trigger=trigger, status="pending"
     )
@@ -139,14 +166,6 @@ async def _execute(def_row: Dict[str, Any], run_id: int, trigger: str) -> None:
                                     message="job has no target_url")
             await repo.record_run_finish(run_id, status="failed",
                                          error_message="job has no target_url")
-            return
-
-        if kind == "crawl":
-            cp = _crawl_params(params)
-            cjob = crawler.create_job(base_url=target_url, **cp)
-            # run_crawl marks processing, records pages, and finalizes the run.
-            await crawler.run_crawl(cjob, db_run_id=run_id,
-                                    db_job_id=def_row.get("id"), db_trigger=trigger)
             return
 
         # scrape kind

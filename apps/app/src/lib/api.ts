@@ -77,17 +77,129 @@ export type CorpusStats = {
   targets: string[];
 };
 
+export type CrawlPage = {
+  discovery_seq?: number;
+  original_url?: string;
+  normalized_url?: string;
+  state?: string;
+  final_url?: string | null;
+  status_code?: number | null;
+  title?: string | null;
+  markdown?: string | null;
+  html?: string | null;
+  metadata?: Record<string, unknown> | null;
+  downloaded_bytes?: number;
+  artifact_bytes?: number;
+  created_at?: string;
+  url?: string;
+  [key: string]: unknown;
+};
+
+export type CrawlDisplayPage = CrawlPage & {
+  url: string;
+  title: string;
+  markdown: string;
+  html: string;
+  metadata: Record<string, unknown>;
+};
+
+export type CrawlPagesResponse = {
+  pages: CrawlPage[];
+  nextAfter: number | null;
+};
+
 export type CrawlJob = {
+  id?: string;
   job_id?: string;
   jobId?: string;
   base_url?: string;
+  state?: string;
   status: string;
   progress?: number;
-  results?: Array<Record<string, unknown>>;
+  resultCount?: number;
+  discovered_count?: number;
+  terminal_count?: number;
+  succeeded_count?: number;
+  failed_count?: number;
+  blocked_count?: number;
+  max_pages?: number;
+  config?: Record<string, unknown>;
+  results?: CrawlPage[];
   errors?: Array<Record<string, unknown> | string>;
   error?: string;
   [key: string]: unknown;
 };
+
+function stringValue(...values: unknown[]) {
+  const value = values.find((candidate) => typeof candidate === "string" && candidate.length > 0);
+  return typeof value === "string" ? value : "";
+}
+
+function crawlPageKey(page: CrawlPage) {
+  if (typeof page.discovery_seq === "number" && Number.isFinite(page.discovery_seq)) {
+    return `sequence:${page.discovery_seq}`;
+  }
+  return `url:${stringValue(page.final_url, page.original_url, page.normalized_url, page.url)}`;
+}
+
+export function crawlPageToResult(page: CrawlPage): CrawlDisplayPage {
+  const metadata = page.metadata && typeof page.metadata === "object" ? page.metadata : {};
+  return {
+    ...page,
+    url: stringValue(
+      page.final_url,
+      page.original_url,
+      page.normalized_url,
+      page.url,
+      metadata.url,
+    ),
+    title: stringValue(page.title, metadata.title),
+    markdown: typeof page.markdown === "string" ? page.markdown : "",
+    html: typeof page.html === "string" ? page.html : "",
+    metadata,
+  };
+}
+
+export function mergeCrawlPages(
+  existing: CrawlDisplayPage[],
+  incoming: CrawlPage[],
+): CrawlDisplayPage[] {
+  const pages = new Map(existing.map((page) => [crawlPageKey(page), page]));
+  for (const update of incoming) {
+    const key = crawlPageKey(update);
+    const previous = pages.get(key);
+    const combined: CrawlPage = {
+      ...previous,
+      ...update,
+      metadata: {
+        ...(previous?.metadata ?? {}),
+        ...(update.metadata ?? {}),
+      },
+    };
+    if (previous && (update.markdown === undefined || update.markdown === null)) {
+      combined.markdown = previous.markdown;
+    }
+    if (previous && (update.html === undefined || update.html === null)) {
+      combined.html = previous.html;
+    }
+    pages.set(key, crawlPageToResult(combined));
+  }
+  return [...pages.values()].sort((left, right) => {
+    const leftSequence = typeof left.discovery_seq === "number" ? left.discovery_seq : Number.MAX_SAFE_INTEGER;
+    const rightSequence = typeof right.discovery_seq === "number" ? right.discovery_seq : Number.MAX_SAFE_INTEGER;
+    return leftSequence - rightSequence || left.url.localeCompare(right.url);
+  });
+}
+
+export function crawlMarkdown(pages: CrawlDisplayPage[]) {
+  return pages
+    .filter((page) => page.state === "succeeded" || page.markdown.length > 0)
+    .map((page) => {
+      const heading = page.title || page.url || "Captured page";
+      return `# ${heading}\n\n${page.markdown}`.trimEnd();
+    })
+    .join("\n\n---\n\n");
+}
 
 export type ScrapeResult = {
   success: boolean;

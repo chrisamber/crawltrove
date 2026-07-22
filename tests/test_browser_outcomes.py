@@ -209,3 +209,22 @@ async def test_browser_non_2xx_navigation_is_not_success(monkeypatch):
     assert result["success"] is False
     assert result["metadata"]["reason"] == "http_status_error"
     assert result["metadata"]["status_code"] == 404
+
+
+async def test_browser_budget_is_reserved_before_launch(monkeypatch):
+    monkeypatch.setattr(scraper_mod, "ensure_public_url", _public_url)
+    monkeypatch.setattr(
+        scraper_mod,
+        "async_playwright",
+        lambda: (_ for _ in ()).throw(AssertionError("browser launched")),
+    )
+
+    async def denied():
+        return False
+
+    result = await WebScraper().scrape(
+        "https://example.test", engine="browser", before_browser=denied,
+    )
+
+    assert result["success"] is False
+    assert result["metadata"]["reason"] == "browser_budget_exhausted"

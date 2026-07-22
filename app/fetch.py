@@ -5,6 +5,8 @@ no browser, ~10x cheaper than a Playwright render. Tier 2 (Playwright, in
 scraper.py) is only used when a successful HTML response looks like a JS shell
 or bot challenge.
 """
+import asyncio
+import inspect
 import ipaddress
 from typing import Any, Dict, Optional
 from urllib.parse import urljoin, urlsplit
@@ -43,68 +45,199 @@ DOM_RENDER_MARKERS = (
 # A short page needs explicit application structure before it is an SPA shell.
 MIN_VISIBLE_TEXT = 400
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
-MAX_REDIRECTS = 30
+MAX_REDIRECTS = 10
+DEFAULT_MAX_DECODED_BYTES = 10 * 1024 * 1024
 
 
-async def fetch_http(url: str, timeout_s: int = 20) -> Optional[Dict[str, Any]]:
-    """GET a URL with browser TLS fingerprints. Returns None on transport error."""
-    try:
-        async with AsyncSession(impersonate="chrome", trust_env=False) as session:
-            current_url = url
-            for redirects in range(MAX_REDIRECTS + 1):
-                addresses = await ensure_public_url(current_url)
-                if addresses:
-                    parsed = urlsplit(current_url)
-                    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-                    host = parsed.hostname.encode("idna").decode("ascii")
-                    try:
-                        ipaddress.ip_address(host)
-                    except ValueError:
-                        pinned = ",".join(
-                            f"[{address}]" if ":" in address else address
-                            for address in addresses
-                        )
-                        session.curl_options = {
-                            CurlOpt.RESOLVE: [f"{host}:{port}:{pinned}"]
-                        }
-                    else:
-                        # Literal IPs are already pinned by the URL itself, and
-                        # IPv6 literals are ambiguous in CURLOPT_RESOLVE syntax.
-                        session.curl_options = {}
-                resp = await session.get(
-                    current_url, timeout=timeout_s, allow_redirects=False
+class HttpFetcher:
+    """A reusable HTTP session with SSRF validation and bounded response bodies."""
+
+    def __init__(self, session_factory=None):
+        self._session_factory = session_factory or AsyncSession
+        self._session = None
+        # DNS pin state is session-wide, so serialize requests that update it.
+        self._lock = asyncio.Lock()
+
+    async def start(self) -> None:
+        async with self._lock:
+            self._start_unlocked()
+
+    def _start_unlocked(self) -> None:
+        if self._session is None:
+            self._session = self._session_factory(
+                impersonate="chrome", trust_env=False
+            )
+
+    async def close(self) -> None:
+        async with self._lock:
+            session, self._session = self._session, None
+            if session is not None and hasattr(session, "close"):
+                result = session.close()
+                if inspect.isawaitable(result):
+                    await result
+
+    async def fetch(self, url: str, timeout_s: int = 60,
+                    max_decoded_bytes: int = DEFAULT_MAX_DECODED_BYTES) -> Optional[Dict[str, Any]]:
+        """Fetch one public URL without exceeding its decoded body allowance."""
+        async with self._lock:
+            self._start_unlocked()
+            return await self._fetch(url, timeout_s, max_decoded_bytes)
+
+    async def fetch_request(self, url: str, method: str = "GET", *,
+                            headers: Optional[Dict[str, str]] = None,
+                            data: Optional[bytes] = None,
+                            max_decoded_bytes: int = DEFAULT_MAX_DECODED_BYTES
+                            ) -> Optional[Dict[str, Any]]:
+        """Fetch exactly one validated, DNS-pinned HTTP hop for a browser route."""
+        async with self._lock:
+            self._start_unlocked()
+            try:
+                addresses = await ensure_public_url(url)
+                self._pin(url, addresses)
+                response = await self._request(
+                    url, 60, method=method, headers=headers, data=data,
                 )
-                if addresses:
+                try:
+                    self._verify_connected(response, addresses)
+                    return {
+                        "status": response.status_code,
+                        "headers": dict(response.headers),
+                        "content": await self._body(response, max_decoded_bytes),
+                        "final_url": str(response.url),
+                    }
+                finally:
+                    await self._close_stream(response)
+            except UnsafeUrlError:
+                raise
+            except Exception:
+                return None
+
+    async def _fetch(self, url: str, timeout_s: int,
+                     max_decoded_bytes: int) -> Optional[Dict[str, Any]]:
+        try:
+            async with asyncio.timeout(timeout_s):
+                current_url = url
+                for redirects in range(MAX_REDIRECTS + 1):
+                    addresses = await ensure_public_url(current_url)
+                    self._pin(current_url, addresses)
+
+                    response = await self._request(current_url, timeout_s)
                     try:
-                        connected_ip = str(ipaddress.ip_address(resp.primary_ip))
-                    except (TypeError, ValueError) as exc:
-                        raise UnsafeUrlError(
-                            "Could not verify the connected server address"
-                        ) from exc
-                    if connected_ip not in addresses:
-                        raise UnsafeUrlError(
-                            "Connected server address changed after validation"
-                        )
-                location = resp.headers.get("location")
-                if resp.status_code in REDIRECT_STATUSES and location:
-                    if redirects == MAX_REDIRECTS:
-                        return None
-                    current_url = urljoin(current_url, location)
-                    continue
-                content_type = resp.headers.get("content-type", "")
-                return {
-                    "status": resp.status_code,
-                    "html": resp.text,
-                    "content": resp.content,
-                    "final_url": str(resp.url),
-                    "content_type": content_type,
-                }
-    except UnsafeUrlError:
-        # Do not turn a policy rejection into a transport failure that could
-        # trigger a browser-tier retry.
-        raise
-    except Exception:
-        return None
+                        self._verify_connected(response, addresses)
+                        location = response.headers.get("location")
+                        if response.status_code in REDIRECT_STATUSES and location:
+                            if redirects == MAX_REDIRECTS:
+                                return None
+                            current_url = urljoin(current_url, location)
+                            continue
+                        content = await self._body(response, max_decoded_bytes)
+                        content_type = response.headers.get("content-type", "")
+                        encoding = getattr(response, "encoding", None) or "utf-8"
+                        return {
+                            "status": response.status_code,
+                            "html": content.decode(encoding, "replace"),
+                            "content": content,
+                            "headers": dict(response.headers),
+                            "final_url": str(response.url),
+                            "content_type": content_type,
+                        }
+                    finally:
+                        await self._close_stream(response)
+        except UnsafeUrlError:
+            raise
+        except Exception:
+            return None
+
+    def _pin(self, url: str, addresses) -> None:
+        if addresses:
+            parsed = urlsplit(url)
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            host = parsed.hostname.encode("idna").decode("ascii")
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                pinned = ",".join(
+                    f"[{address}]" if ":" in address else address
+                    for address in addresses
+                )
+                self._session.curl_options = {CurlOpt.RESOLVE: [f"{host}:{port}:{pinned}"]}
+            else:
+                self._session.curl_options = {}
+
+    def _verify_connected(self, response, addresses) -> None:
+        if addresses:
+            try:
+                connected_ip = str(ipaddress.ip_address(response.primary_ip))
+            except (TypeError, ValueError) as exc:
+                raise UnsafeUrlError("Could not verify the connected server address") from exc
+            if connected_ip not in addresses:
+                raise UnsafeUrlError("Connected server address changed after validation")
+
+    async def _request(self, url: str, timeout_s: int, *, method: str = "GET",
+                       headers: Optional[Dict[str, str]] = None,
+                       data: Optional[bytes] = None):
+        if method == "GET" and hasattr(self._session, "stream"):
+            stream = self._session.stream(
+                method, url, timeout=(10, timeout_s), allow_redirects=False,
+                headers=headers,
+            )
+            async with asyncio.timeout(20):
+                response = await stream.__aenter__()
+            response._crawltrove_stream = stream
+            return response
+        if method == "GET" and not headers and data is None:
+            return await self._session.get(url, timeout=timeout_s, allow_redirects=False)
+        return await self._session.request(
+            method, url, timeout=timeout_s, allow_redirects=False,
+            headers=headers, data=data,
+        )
+
+    async def _body(self, response, max_decoded_bytes: int) -> bytes:
+        try:
+            if hasattr(response, "aiter_content"):
+                chunks = []
+                size = 0
+                async for chunk in response.aiter_content():
+                    size += len(chunk)
+                    if size > max_decoded_bytes:
+                        raise ValueError("HTTP response exceeds decoded byte limit")
+                    chunks.append(chunk)
+                return b"".join(chunks)
+            content = response.content
+            if len(content) > max_decoded_bytes:
+                raise ValueError("HTTP response exceeds decoded byte limit")
+            return content
+        finally:
+            await self._close_stream(response)
+
+    async def _close_stream(self, response) -> None:
+        stream = getattr(response, "_crawltrove_stream", None)
+        if stream is not None:
+            response._crawltrove_stream = None
+            await stream.__aexit__(None, None, None)
+
+
+_shared_fetcher = HttpFetcher()
+
+
+async def fetch_http(
+    url: str,
+    timeout_s: int = 20,
+    max_decoded_bytes: int = DEFAULT_MAX_DECODED_BYTES,
+) -> Optional[Dict[str, Any]]:
+    """Fetch through the process-local reusable session."""
+    global _shared_fetcher
+    if _shared_fetcher._session_factory is not AsyncSession:
+        await _shared_fetcher.close()
+        _shared_fetcher = HttpFetcher()
+    return await _shared_fetcher.fetch(
+        url, timeout_s=timeout_s, max_decoded_bytes=max_decoded_bytes,
+    )
+
+
+async def close_http_fetcher() -> None:
+    """Release the shared HTTP session during application shutdown."""
+    await _shared_fetcher.close()
 
 
 def needs_browser(response: Optional[Dict[str, Any]]) -> bool:
