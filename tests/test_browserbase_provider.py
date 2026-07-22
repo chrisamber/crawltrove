@@ -78,6 +78,19 @@ async def test_browserbase_api_disables_proxies_and_accepts_empty_delete():
 
 
 @pytest.mark.asyncio
+async def test_browserbase_api_normalizes_retry_after():
+    api = BrowserbaseAPI(
+        "secret",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(
+            429, headers={"retry-after": "9999999999"},
+        )),
+    )
+    with pytest.raises(ProviderFailure) as error:
+        await api.create("project", 60)
+    assert error.value.retry_after_seconds == 3600
+
+
+@pytest.mark.asyncio
 async def test_browserbase_always_terminates_session(monkeypatch):
     async def public(_url):
         return ("93.184.216.34",)

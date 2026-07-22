@@ -16,6 +16,7 @@ from app.acquisition.providers import (
     ProviderProtocolError,
     ProviderRequest,
     ProviderResult,
+    parse_retry_after,
 )
 from app.acquisition.sessions import SessionHandle, SessionSnapshot
 from app.scraper import MAX_DOM_BYTES, _guard_browser_websocket
@@ -48,7 +49,11 @@ class BrowserbaseAPI:
         if response.status_code == 402:
             raise ProviderFailure("provider_budget", False, NativeCost({}), 402)
         if response.status_code == 429 or response.status_code >= 500:
-            raise ProviderFailure("provider_unavailable", True, NativeCost({}), response.status_code)
+            raise ProviderFailure(
+                "provider_unavailable", True, NativeCost({}), response.status_code,
+                parse_retry_after(response.headers.get("retry-after"))
+                if response.status_code == 429 else None,
+            )
         if response.status_code >= 400:
             raise ProviderFailure("provider_request", False, NativeCost({}), response.status_code)
         if response.status_code == 204 or not response.content:

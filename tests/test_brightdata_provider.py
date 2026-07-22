@@ -14,6 +14,18 @@ def _request() -> ProviderRequest:
     )
 
 
+@pytest.mark.parametrize("api_url", [
+    "http://api.brightdata.com/request",
+    "https://secret@api.brightdata.com/request",
+    "https:///request",
+])
+def test_brightdata_rejects_unsafe_api_urls(api_url):
+    from app.acquisition.brightdata import BrightDataAdapter
+
+    with pytest.raises(ValueError, match="HTTPS without credentials"):
+        BrightDataAdapter("secret", "zone-a", api_url=api_url)
+
+
 @pytest.fixture
 def mock_transport():
     requests = []

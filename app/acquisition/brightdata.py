@@ -4,6 +4,7 @@ import logging
 import re
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -71,7 +72,8 @@ def _reported_payload(body: bytes, response_status: int) -> tuple[str, str | Non
     final_url = next((envelope.get(key) for key in ("url", "final_url", "finalUrl")
                       if isinstance(envelope.get(key), str) and envelope.get(key)), None)
     status = next((envelope.get(key) for key in ("status_code", "statusCode", "status")
-                   if isinstance(envelope.get(key), int)), response_status)
+                   if isinstance(envelope.get(key), int)
+                   and not isinstance(envelope.get(key), bool)), response_status)
     return html, final_url, status
 
 
@@ -86,6 +88,9 @@ class BrightDataAdapter:
                  transport: httpx.AsyncBaseTransport | None = None):
         self._api_key = (api_key or "").strip()
         self._zone = (zone or "").strip()
+        parsed = urlsplit(api_url)
+        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("Bright Data API URL must be HTTPS without credentials")
         self._api_url = api_url
         self._transport = transport
 
