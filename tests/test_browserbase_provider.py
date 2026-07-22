@@ -1,8 +1,14 @@
 from datetime import datetime, timedelta, timezone
+import json
 
+import httpx
 import pytest
 
-from app.acquisition.browserbase import BrowserbaseAdapter, BrowserbaseSessionBackend
+from app.acquisition.browserbase import (
+    BrowserbaseAPI,
+    BrowserbaseAdapter,
+    BrowserbaseSessionBackend,
+)
 from app.acquisition.providers import ProviderFailure, ProviderRequest
 from app.acquisition.sessions import SessionHandle
 
@@ -49,6 +55,26 @@ class FakePlaywright:
 def test_browserbase_rejects_proxy_budget():
     with pytest.raises(ValueError, match="managed proxies are disabled"):
         BrowserbaseAdapter.validate_budget({"browserMinutes": 5, "proxyBytes": 1})
+
+
+@pytest.mark.asyncio
+async def test_browserbase_api_disables_proxies_and_accepts_empty_delete():
+    requests = []
+
+    async def handle(request):
+        requests.append(request)
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(200, json={"id": "session-1", "connectUrl": "wss://cdp"})
+
+    api = BrowserbaseAPI("secret", transport=httpx.MockTransport(handle))
+    await api.create("project", 60)
+    await api.delete("session-1")
+
+    assert json.loads(requests[0].content) == {
+        "projectId": "project", "timeout": 60, "keepAlive": False, "proxies": False,
+    }
+    assert requests[0].headers["x-bb-api-key"] == "secret"
 
 
 @pytest.mark.asyncio
