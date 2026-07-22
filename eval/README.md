@@ -79,3 +79,27 @@ semantic on any aggregate metric or on the exact-symbol subset. Without
 Cases use stable `kind:url:<canonical-url>` identities where possible. Add one
 JSON file per case under `eval/retrieval/cases/` with `name`, `query`, non-empty
 `relevantIds`, optional `tags`, `filters`, and `notes`.
+
+## Acquisition evaluation
+
+`eval/acquisition/` compares CrawlTrove, Firecrawl, and Crawl4AI on the four
+checked-in public fixtures: simple HTML, JavaScript-rendered quotes, plain
+text, and PDF. It is report-only: a five-run comparison does not select an
+overall winner or gate a release.
+
+Install the optional isolated evaluator, start CrawlTrove locally, and provide
+a Firecrawl key only in the shell running the command:
+
+```bash
+.venv/bin/python -m pip install -r requirements-eval.txt
+FIRECRAWL_API_KEY=... .venv/bin/python -m eval.acquisition --dry-run
+FIRECRAWL_API_KEY=... .venv/bin/python -m eval.acquisition
+```
+
+If the local API uses `API_KEYS`, set `CRAWLTROVE_API_KEY` in the same shell.
+
+The dry run makes one fresh simple-HTML request per tool. The full run makes
+five sequential, cache-disabled calls per tool/case and writes an ignored JSON
+report under `tmp/`. Reports contain only outcomes, timing, output-byte counts,
+correctness rates, and provider-native usage; they do not contain page bodies,
+headers, or credentials.

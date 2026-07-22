@@ -1,0 +1,2 @@
+# Optional competitive acquisition evaluator. Runtime dependencies stay in requirements.txt.
+crawl4ai==0.9.2
