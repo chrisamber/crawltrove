@@ -145,7 +145,7 @@ export type Worker = {
 export type LiveSession = {
   id: string;
   backend: "browserbase" | "firecrawl" | "owned";
-  state: "waiting" | "active" | "closed" | "expired";
+  state: "starting" | "waiting" | "connected" | "resuming" | "closed" | "expired" | "cancelled";
   expiresAt: string;
 };
 

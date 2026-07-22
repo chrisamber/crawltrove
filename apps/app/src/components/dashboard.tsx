@@ -5,11 +5,11 @@ import { Download, FileJson, Filter, Globe2, LoaderCircle, RefreshCw, RotateCcw,
 import { toast } from "sonner";
 
 import { AppShell, PageHeader, type ViewId } from "@/components/app-shell";
+import { AcquisitionInspector } from "@/components/acquisition-inspector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
 import {
@@ -363,7 +363,11 @@ function CrawlWorkspace({ active }: { active: boolean }) {
                   { label: "Errors", value: job.errors?.length ?? 0 },
                 ]} />
                 <div className="p-4"><ProgressTimeline steps={timeline} /></div>
-                <Separator className="bg-white/[0.08]" />
+                <AcquisitionInspector
+                  job={job}
+                  jobId={String(job.id ?? job.job_id ?? job.jobId ?? jobId ?? "")}
+                  onRefresh={retryPolling}
+                />
                 <CodeViewer key={markdown ? "crawl-content" : "crawl-status"} className="flex-1" sources={{ markdown, events: crawlEvents(job, capturedPages), json: JSON.stringify({ ...job, pages: crawlPages }, null, 2) }} />
               </div>
             ) : null}
@@ -406,7 +410,7 @@ function CrawlWorkspace({ active }: { active: boolean }) {
                   </div>
                   <div className={cn("space-y-2", mode === "scrape" && "opacity-40")}>
                     <Label htmlFor="page-limit" className="text-xs text-zinc-400">Page limit</Label>
-                    <Input id="page-limit" type="number" min={1} max={500} value={limit} onChange={(event) => setLimit(Number(event.target.value))} className="h-8 border-white/10 bg-[#090a0c] font-mono text-xs" disabled={busy || mode === "scrape"} />
+                    <Input id="page-limit" type="number" min={1} max={100} value={limit} onChange={(event) => setLimit(Number(event.target.value))} className="h-8 border-white/10 bg-[#090a0c] font-mono text-xs" disabled={busy || mode === "scrape"} />
                   </div>
                 </div>
               </div>
