@@ -9,6 +9,9 @@ The supported Docker runtime includes a local Next.js operator GUI for starting
 crawls, inspecting runs and saved documents, and browsing corpus records. It
 also exposes the JSON API and optional stdio MCP adapter.
 
+See the [v0.4 release notes](docs/release-v0.4.0.md) for migration, remote
+worker, provider-budget, human-session, operations, and verification details.
+
 ![CrawlTrove dashboard](docs/assets/dashboard.png)
 
 > Crawl responsibly. You are responsible for respecting website terms,
@@ -89,9 +92,14 @@ duplicate detection.
 | `POST /api/research` | Start a budget-limited research run. |
 | `POST /api/llmstxt` | Generate `llms.txt` and `llms-full.txt`. |
 | `GET /api/health` | Liveness and optional database state. |
+| `GET /health/ready` | Strict database, migration, artifact, lease, and browser readiness. |
+| `GET /metrics` | Authenticated Prometheus metrics with bounded labels. |
+| `GET /api/operations/*` | Authenticated worker, provider, session, attempt, and failure reads. |
 
 The OpenAPI schema at `/docs` is the authoritative request and response
-reference.
+reference. `/api/scrape` remains available without PostgreSQL for compatible
+single-page use. The durable `/api/crawl` queue requires PostgreSQL and returns
+a service-unavailable response when persistence is not configured.
 
 ## MCP server
 
@@ -148,6 +156,11 @@ Common settings:
 | `SEARXNG_BASE_URL`, `BRAVE_SEARCH_API_KEY` | Optional web-search provider. |
 | `WEBHOOK_URL`, `WEBHOOK_SECRET` | Signed completion webhooks. |
 | `DATA_DIR` | Host-mode artifact directory; Compose uses `/workspace/data` in a named volume. |
+| `CRAWLTROVE_REMOTE_WORKERS` | Enable directly connected remote acquisition workers. Requires S3 artifacts. |
+| `FIRECRAWL_API_KEY` | Enable the dedicated Firecrawl integration. |
+| `BRIGHTDATA_API_KEY`, `BRIGHTDATA_UNLOCKER_ZONE` | Enable Bright Data Web Unlocker. |
+| `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID` | Enable Browserbase sessions. |
+| `SESSION_ENCRYPTION_KEY` | Encrypt persisted browser profiles; previous keys support rotation. |
 | `LOG_LEVEL`, `LOG_FORMAT` | Logging verbosity and optional JSON output. |
 
 ### Network deployment
@@ -186,6 +199,22 @@ provider. The local bootstrap creates the dedicated `captcha.json` bundle with
 `browser,captcha,http` capabilities and a separate S3 prefix; it is still
 opt-in and never starts with the default Compose stack.
 
+### Remote acquisition workers
+
+Production remote workers connect directly to PostgreSQL with an enrolled,
+least-privilege database identity and verified TLS credentials. They require
+immutable worker-scoped S3 storage; the core refuses filesystem artifact mode
+when `CRAWLTROVE_REMOTE_WORKERS=true`. Use `scripts/enroll_worker.py` to create
+standard, browser, or CAPTCHA bundles and distribute their mode-0600 secrets
+out of band. The insecure database override used by local Compose is not a
+production configuration.
+
+Managed providers are separate integrations, not generic proxy aliases. Crawl
+requests can select a provider and cap its native units through
+`acquisition.creditBudgets`: Firecrawl credits, Bright Data requests, or
+Browserbase browser minutes/proxy bytes. Missing credentials leave that
+provider disabled.
+
 ## Upgrading from an earlier local checkout
 
 The renamed Compose stack deliberately uses new `crawltrove_data` and
@@ -215,7 +244,9 @@ docker compose exec db pg_restore --clean --if-exists --no-owner \
 ```
 
 Keep the backups until the dashboard and database-backed searches show the
-expected records. The former volumes remain untouched for rollback.
+expected records. The former volumes remain untouched for rollback. The v0.4
+migrations are forward-only and additive, but an already-running legacy crawl
+is not imported into the durable queue; restart that crawl after upgrading.
 
 ## Development
 
@@ -281,7 +312,8 @@ artifacts. The live service does not depend on the corpus pipeline.
 See the [frontier web-scraping evaluation](docs/frontier-scraping-evaluation.md)
 for live acquisition benchmarks, comparisons with managed and open-source
 scraping tools, known browser and anti-bot limitations, and the recommended
-roadmap.
+roadmap. The reproducible v0.4 Firecrawl/Crawl4AI harness and its paid-call
+preflight are documented in the [v0.4 release notes](docs/release-v0.4.0.md#evaluation).
 
 ## License
 

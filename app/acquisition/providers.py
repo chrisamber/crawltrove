@@ -58,6 +58,7 @@ class ProviderRequest:
     timeout_seconds: int
     only_main_content: bool
     session_profile: str | None = None
+    max_decoded_bytes: int | None = None
 
 
 @dataclass(frozen=True)

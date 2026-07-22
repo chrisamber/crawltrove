@@ -137,7 +137,7 @@ export type ProviderUsage = {
 
 export type Worker = {
   id: string;
-  state: "active" | "offline" | "draining" | "revoked" | "unknown";
+  state: "active" | "offline" | "draining" | "revoked" | "incompatible" | "unknown";
   capabilities: string[];
   lastSeenAt: string | null;
 };

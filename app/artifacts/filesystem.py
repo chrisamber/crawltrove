@@ -13,6 +13,10 @@ class FilesystemArtifactStore:
         self.root = Path(root).resolve()
 
     async def healthcheck(self) -> bool:
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return False
         return self.root.is_dir() and os.access(self.root, os.R_OK | os.W_OK)
 
     def _path_for_ref(self, ref: ArtifactRef) -> Path:

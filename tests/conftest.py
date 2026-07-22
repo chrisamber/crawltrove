@@ -114,7 +114,7 @@ async def db(monkeypatch):
             "TRUNCATE crawl_jobs, crawl_tasks, crawl_results, crawl_origins,"
             " crawl_origin_leases, crawl_events, acquisition_attempts, research_runs,"
             " scrape_errors, extracted_records, scraped_pages,"
-            " scrape_runs, scrape_jobs RESTART IDENTITY CASCADE"
+            " scrape_runs, scrape_jobs, workers RESTART IDENTITY CASCADE"
         )
     try:
         yield p

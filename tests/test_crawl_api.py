@@ -1,4 +1,6 @@
 import asyncio
+from datetime import datetime, timezone
+from uuid import UUID
 
 import httpx
 
@@ -227,6 +229,101 @@ async def test_scheduled_crawl_returns_compatibility_run_id(monkeypatch):
         "params": {"limit": 2},
     })
     assert run_id == 42
+
+
+async def test_events_resume_from_last_event_id_and_close_at_terminal(monkeypatch):
+    from app.main import app
+    from app.routes import routes_crawl
+
+    seen = []
+
+    async def list_events(_job_id, after, limit):
+        seen.append((after, limit))
+        if limit == 1:
+            return []
+        if after < 5:
+            return [{
+                "id": 5, "task_id": None, "event": "job_completed",
+                "metadata": {}, "created_at": datetime.now(timezone.utc),
+            }]
+        return []
+
+    async def job_state(_job_id):
+        return "completed"
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(routes_crawl.repository, "list_events", list_events)
+    monkeypatch.setattr(routes_crawl.repository, "job_state", job_state)
+    monkeypatch.setattr(routes_crawl.asyncio, "sleep", no_sleep)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        response = await client.get(
+            "/api/crawl/00000000-0000-0000-0000-000000000001/events",
+            headers={"Last-Event-ID": "4"},
+        )
+        invalid = await client.get(
+            "/api/crawl/00000000-0000-0000-0000-000000000001/events",
+            headers={"Last-Event-ID": str(2**63)},
+        )
+
+    assert response.status_code == 200
+    assert "id: 5\nevent: job_completed" in response.text
+    assert seen[0] == (4, 1) and (4, 100) in seen
+    assert invalid.status_code == 400
+
+
+@requires_db
+async def test_retry_failures_creates_new_job_without_mutating_source(db):
+    from app.crawl import repository
+    from app.crawl.classify import FailureDecision
+    from app.crawl.config import CrawlConfig
+    from app.main import app
+
+    source_id = await repository.submit_job(CrawlConfig(
+        url="https://example.com/fail", minDelayMs=0,
+    ))
+    source_task = await repository.claim_task("retry-source", {"http"})
+    assert source_task is not None
+    assert await repository.fail_task(
+        source_task.id, source_task.lease_token,
+        FailureDecision(False, "transport", "fixture_failure"),
+    )
+
+    other_id = await repository.submit_job(CrawlConfig(
+        url="https://example.org/foreign", minDelayMs=0,
+    ))
+    other_task = await repository.claim_task("retry-foreign", {"http"})
+    assert other_task is not None and other_task.job_id == other_id
+    assert await repository.fail_task(
+        other_task.id, other_task.lease_token,
+        FailureDecision(False, "transport", "fixture_failure"),
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        retried = await client.post(f"/api/crawl/{source_id}/retry-failures")
+        rejected = await client.post(
+            f"/api/crawl/{source_id}/retry-failures",
+            json={"taskIds": [str(other_task.id)]},
+        )
+
+    assert retried.status_code == 202
+    retry_id = retried.json()["jobId"]
+    assert retry_id != str(source_id)
+    assert rejected.status_code == 409
+    async with db.acquire() as conn:
+        source_state = await conn.fetchval(
+            "SELECT state FROM crawl_tasks WHERE id = $1", source_task.id,
+        )
+        retry_urls = await conn.fetch(
+            "SELECT original_url FROM crawl_tasks WHERE job_id = $1", UUID(retry_id),
+        )
+    assert source_state == "permanent_failed"
+    assert [row["original_url"] for row in retry_urls] == [source_task.url]
 
 
 @requires_db

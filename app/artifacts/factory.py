@@ -1,6 +1,7 @@
 """Fail-closed configuration for artifact storage backends."""
 
 import os
+from pathlib import Path
 
 from .filesystem import FilesystemArtifactStore
 from .s3 import S3ArtifactStore
@@ -27,7 +28,8 @@ def artifact_store(worker_id: str | None = None):
             raise RuntimeError("remote workers require S3-compatible storage")
         if role != "core":
             raise RuntimeError(f"unsupported artifact-store role: {role}")
-        return FilesystemArtifactStore(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
+        default_root = Path(os.getenv("DATA_DIR", "data")) / "artifacts"
+        return FilesystemArtifactStore(os.getenv("ARTIFACT_ROOT", str(default_root)))
 
     if backend != "s3":
         raise RuntimeError(f"unsupported ARTIFACT_STORE_BACKEND: {backend}")

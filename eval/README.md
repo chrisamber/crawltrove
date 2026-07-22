@@ -96,6 +96,10 @@ FIRECRAWL_API_KEY=... .venv/bin/python -m eval.acquisition --dry-run
 FIRECRAWL_API_KEY=... .venv/bin/python -m eval.acquisition
 ```
 
+Before the first run, install the Chromium runtime required by Crawl4AI 0.9.2
+using Crawl4AI's supported browser-setup command. Dependency installation alone
+does not download that browser.
+
 If the local API uses `API_KEYS`, set `CRAWLTROVE_API_KEY` in the same shell.
 
 The dry run makes one fresh simple-HTML request per tool. The full run makes

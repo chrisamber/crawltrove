@@ -6,6 +6,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from app.crawl.types import ClaimedTask, TaskResult
+from app.acquisition.sessions import SessionHandle
 from app import normalize
 
 
@@ -179,3 +180,53 @@ class RemoteRepository:
             return bool(await conn.fetchval(
                 "SELECT worker_api.wait_for_input($1,$2,$3)", task_id, lease_token, code
             ))
+
+    async def start_live_session(self, task: ClaimedTask, *, backend: str, worker_id: str):
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM worker_api.start_live_session($1,$2,$3,$4,$5,$6)",
+                task.id, task.lease_token, backend, worker_id, 900,
+                "human_input_required",
+            )
+        if row is None:
+            return None
+        return SessionHandle(id=row["id"], backend=row["backend"], expires_at=row["expires_at"])
+
+    async def issue_live_session_token(self, session_id: UUID) -> str | None:
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("SELECT worker_api.issue_live_session_token($1)", session_id)
+
+    async def touch_live_session(self, session_id: UUID) -> bool:
+        async with self.pool.acquire() as conn:
+            return bool(await conn.fetchval("SELECT worker_api.touch_live_session($1)", session_id))
+
+    async def close_live_session(
+        self, session_id: UUID, reason: str, worker_id: str | None = None,
+    ) -> bool:
+        del worker_id
+        async with self.pool.acquire() as conn:
+            return bool(await conn.fetchval("SELECT worker_api.close_live_session($1,$2)", session_id, reason))
+
+    async def inspect_live_session(self, session_id: UUID) -> Optional[dict]:
+        async with self.pool.acquire() as conn:
+            value = await conn.fetchval("SELECT worker_api.inspect_live_session($1)", session_id)
+        return _loads(value) if value is not None else None
+
+    async def resume_live_session(self, session_id: UUID, worker_id: str) -> Optional[ClaimedTask]:
+        del worker_id
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM worker_api.resume_live_session($1)", session_id)
+        if row is None:
+            return None
+        return ClaimedTask(
+            id=row["id"], job_id=row["job_id"], url=row["url"],
+            normalized_url=row["normalized_url"], origin_key=row["origin_key"],
+            depth=row["depth"], attempt=row["attempt"], lease_token=row["lease_token"],
+            deadline_at=row["deadline_at"], config=_loads(row["config"]),
+            byte_allowance=row["byte_allowance"], artifact_allowance=row["artifact_allowance"],
+            required_capabilities=frozenset(self.capabilities),
+        )
+
+    async def finish_live_session(self, session_id: UUID) -> bool:
+        async with self.pool.acquire() as conn:
+            return bool(await conn.fetchval("SELECT worker_api.finish_live_session($1)", session_id))

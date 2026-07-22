@@ -19,7 +19,14 @@ from app import corpus_browser, dedup, embeddings, extract_llm, fetch, llmstxt, 
 from app.services import scraper, crawler, researcher, batcher
 from app.db import migrate, pool, repo
 from app.crawl.service import crawl_service
-from app.routes import routes_crawl, routes_jobs, routes_runs, routes_export
+from app.routes import (
+    routes_acquisition_sessions,
+    routes_crawl,
+    routes_export,
+    routes_jobs,
+    routes_operations,
+    routes_runs,
+)
 from app.url_safety import UnsafeUrlError
 
 logger = logging.getLogger("main")
@@ -77,7 +84,7 @@ async def unsafe_url_handler(_request: Request, exc: UnsafeUrlError):
 APP_USERNAME = os.environ.get("APP_USERNAME", "admin")
 APP_PASSWORD = os.environ.get("APP_PASSWORD")
 API_KEYS = {k.strip() for k in os.environ.get("API_KEYS", "").split(",") if k.strip()}
-_AUTH_OPEN_PATHS = {"/api/health"}
+_AUTH_OPEN_PATHS = {"/api/health", "/health/live", "/health/ready"}
 
 
 def _auth_configured() -> bool:
@@ -106,8 +113,17 @@ def _authorized(request: Request) -> bool:
 
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
+    session_bearer_path = (
+        request.url.path.startswith("/api/acquisition/sessions/")
+        and (request.url.path.endswith("/open") or "/screenshots/" in request.url.path)
+    )
+    metrics_open = (
+        request.url.path == "/metrics"
+        and routes_operations.metrics_auth_bypass_allowed()
+    )
     if (_auth_configured() and request.method != "OPTIONS"
-            and request.url.path not in _AUTH_OPEN_PATHS):
+            and request.url.path not in _AUTH_OPEN_PATHS
+            and not metrics_open and not session_bearer_path):
         if not _authorized(request):
             headers = {}
             if APP_PASSWORD:  # only meaningful for the Basic scheme
@@ -166,6 +182,11 @@ app.include_router(routes_jobs.router)
 app.include_router(routes_runs.router)
 app.include_router(routes_export.router)
 app.include_router(routes_crawl.router)
+app.include_router(routes_acquisition_sessions.router)
+app.include_router(routes_acquisition_sessions.tunnel_router)
+app.include_router(routes_operations.health_router)
+app.include_router(routes_operations.metrics_router)
+app.include_router(routes_operations.router)
 
 
 @app.on_event("startup")
@@ -463,7 +484,7 @@ async def extract_structured(request: ExtractRequest):
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Extraction failed: {e}"
-        )
+        ) from e
 
     # Persist the page (shared with /scrape) and the structured records it
     # yielded. Additive + swallowed; never changes this response.

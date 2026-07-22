@@ -1,6 +1,7 @@
 import asyncio
 import math
 import os
+import time
 from typing import Optional
 
 from app.crawl import repository
@@ -10,6 +11,7 @@ from app.services import scraper
 from app.url_safety import ensure_public_url
 from app.acquisition.registry import env_registry
 from app.acquisition.router import AcquisitionRouter
+from app.acquisition import sessions
 
 
 class ProviderBudgetInvalid(ValueError):
@@ -27,6 +29,9 @@ class CrawlService:
         )
         self._worker_task = None
         self._maintenance_task = None
+        self._maintenance_last_success: float | None = None
+        self._maintenance_last_error: str | None = None
+        self._session_runner = None
         self.registry = env_registry(scraper)
         self._worker.acquisition_router = AcquisitionRouter(self.registry, repository, scraper)
         self._add_available_route_capabilities()
@@ -86,6 +91,14 @@ class CrawlService:
                 self.registry.set_proxy_pool(self._worker.proxy_pool)
                 self._worker.capabilities.add("proxy")
                 self._add_available_route_capabilities()
+            if ("browser" in getattr(self._worker, "capabilities", set())
+                    and getattr(self._worker, "scraper", None) is not None):
+                from app.acquisition.owned_session import OwnedSessionRunner
+                from app.artifacts import artifact_store
+                self._session_runner = OwnedSessionRunner(
+                    self._worker.worker_id, repository, self._worker.scraper, artifact_store(),
+                )
+                self._worker.session_handler = self._session_runner
             self._worker_task = asyncio.create_task(self._run_worker())
         self._maintenance_task = asyncio.create_task(self._run_maintenance())
 
@@ -97,6 +110,10 @@ class CrawlService:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        if self._session_runner is not None:
+            await self._session_runner.close()
+            self._session_runner = None
+            self._worker.session_handler = None
         await self.registry.aclose()
 
     async def _run_worker(self) -> None:
@@ -115,12 +132,15 @@ class CrawlService:
 
     async def _run_maintenance(self) -> None:
         while True:
-            await asyncio.sleep(10)
             try:
                 await repository.reap_expired_leases()
+                await sessions.expire_due()
                 await repository.finalize_jobs()
-            except Exception:
-                pass
+                self._maintenance_last_success = time.monotonic()
+                self._maintenance_last_error = None
+            except Exception as exc:
+                self._maintenance_last_error = type(exc).__name__
+            await asyncio.sleep(10)
 
 
 crawl_service = CrawlService()

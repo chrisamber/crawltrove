@@ -2,12 +2,14 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from app.crawl.classify import backoff_seconds, classify_failure
+from app.crawl.classify import FailureDecision, backoff_seconds, classify_failure
 from app.crawl.config import CrawlConfig
 from app.crawl.discovery import discover_links
 from app.crawl.types import TaskResult
 from app.crawl.policy import classify_robots_response, robots_decision, robots_outcome
 from app import fetch
+from app.acquisition.router import HumanInputRequired
+from app.acquisition.providers import ProviderFailure
 
 
 class CrawlWorker:
@@ -17,7 +19,7 @@ class CrawlWorker:
                  scraper: Any, *, heartbeat_seconds: float = 30,
                  discover: Callable = discover_links, robots_fetch: Callable = fetch.fetch_http,
                  robots_sleep: Callable = asyncio.sleep, proxy_pool: Any = None,
-                 acquisition_router: Any = None):
+                 acquisition_router: Any = None, session_handler: Any = None):
         self.worker_id = worker_id
         self.capabilities = capabilities
         self.repository = repository
@@ -28,6 +30,7 @@ class CrawlWorker:
         self.robots_sleep = robots_sleep
         self.proxy_pool = proxy_pool
         self.acquisition_router = acquisition_router
+        self.session_handler = session_handler
         self.active_lease: tuple[Any, Any] | None = None
         self.active_proxy_lease: Any | None = None
 
@@ -110,7 +113,32 @@ class CrawlWorker:
                 return True
             lease_wait.cancel()
             await asyncio.gather(lease_wait, return_exceptions=True)
-            scraped = await scrape_task
+            try:
+                scraped = await scrape_task
+            except HumanInputRequired as exc:
+                if (exc.backend != "owned" or "browser" not in self.capabilities
+                        or self.session_handler is None):
+                    raise
+                if not await self.session_handler.start(task, scrape_options):
+                    raise
+                return True
+            except ProviderFailure as exc:
+                decision = FailureDecision(
+                    exc.retryable,
+                    "transport" if exc.retryable else "permanent",
+                    exc.code,
+                )
+                await self._record_failure(
+                    task,
+                    {"metadata": {
+                        "reason": exc.code,
+                        "status_code": exc.status_code,
+                        "retry_after": exc.retry_after_seconds,
+                    }},
+                    proxy_lease,
+                    decision=decision,
+                )
+                return True
             if lease_lost.is_set():
                 return True
             if not scraped.get("success"):
@@ -165,9 +193,12 @@ class CrawlWorker:
                 lease_lost.set()
                 return
 
-    async def _record_failure(self, task: Any, scraped: dict, proxy_lease: Any = None) -> None:
+    async def _record_failure(
+        self, task: Any, scraped: dict, proxy_lease: Any = None,
+        *, decision: FailureDecision | None = None,
+    ) -> None:
         metadata = scraped.get("metadata") or {}
-        decision = classify_failure(
+        decision = decision or classify_failure(
             metadata.get("reason", "transport_error"), metadata.get("status_code")
         )
         if proxy_lease is not None:

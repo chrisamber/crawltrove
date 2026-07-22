@@ -127,7 +127,11 @@ class S3ArtifactStore:
         response = await asyncio.to_thread(
             self.client.get_object, Bucket=self.bucket, Key=key
         )
-        data = await asyncio.to_thread(response["Body"].read)
+        body = response["Body"]
+        try:
+            data = await asyncio.to_thread(body.read)
+        finally:
+            await asyncio.to_thread(body.close)
         if len(data) != ref.size or hashlib.sha256(data).hexdigest() != ref.sha256:
             raise ArtifactIntegrityError("artifact contents do not match its reference")
         return data

@@ -69,6 +69,7 @@ class LocalAdapter:
             request.url, only_main_content=request.only_main_content, engine=engine,
             proxy=dict(proxy) if proxy is not None else None,
             trust_env=False,
+            max_decoded_bytes=request.max_decoded_bytes,
         )
         if not isinstance(result, Mapping):
             raise ProviderFailure("provider_protocol_error", False, NativeCost({}))

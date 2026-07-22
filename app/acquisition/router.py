@@ -16,6 +16,14 @@ from app.crawl.types import ClaimedTask, TaskResult
 from app.url_safety import UnsafeUrlError, ensure_public_url
 
 
+class HumanInputRequired(RuntimeError):
+    """A classified challenge may wait for an owned browser worker only."""
+
+    def __init__(self, backend: str = "owned") -> None:
+        self.backend = backend
+        super().__init__("human_input_required")
+
+
 _ROUTES = {
     "ordinary": ("local_http",),
     "static_block": ("owned_proxy_http", "brightdata_unlocker"),
@@ -58,6 +66,7 @@ class AcquisitionRouter:
             only_main_content=bool(task.config.get("onlyMainContent", True)),
             session_profile=acquisition.get("sessionProfile")
             if isinstance(acquisition.get("sessionProfile"), str) else None,
+            max_decoded_bytes=task.byte_allowance,
         )
         last_failure: ProviderFailure | None = None
         for route in routes:
@@ -66,8 +75,16 @@ class AcquisitionRouter:
             adapter = self._registry.adapter_for_route(route)
             route_request = ProviderRequest(
                 request.url, route, request.timeout_seconds, request.only_main_content,
-                request.session_profile,
+                request.session_profile, request.max_decoded_bytes,
             )
+            if (route == "local_browser"
+                    and not await self._repository.reserve_browser_navigation(
+                        task.id, task.lease_token,
+                    )):
+                last_failure = ProviderFailure(
+                    "browser_budget_exhausted", False, NativeCost({}),
+                )
+                continue
             try:
                 reserved = adapter.reserve_cost(route_request)
             except ValueError as exc:
@@ -139,10 +156,20 @@ class AcquisitionRouter:
                         except Exception:
                             pass
             if transition_to_static_block:
-                return await self.acquire(task, capability="static_block")
+                try:
+                    return await self.acquire(task, capability="static_block")
+                except ProviderUnavailable:
+                    if (acquisition.get("allowHumanIntervention") is True
+                            and provider in {"auto", "local"}):
+                        raise HumanInputRequired("owned") from failure
+                    raise
             if failure is None or not failure.retryable:
                 break
         if last_failure is not None:
+            if (last_failure.code in {"blocked_challenge", "human_input_required"}
+                    and acquisition.get("allowHumanIntervention") is True
+                    and provider in {"auto", "local"}):
+                raise HumanInputRequired("owned") from last_failure
             raise last_failure
         raise ProviderUnavailable("provider_unavailable")
 

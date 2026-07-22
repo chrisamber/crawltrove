@@ -235,6 +235,8 @@ services:
       - WORKER_ALLOW_INSECURE_DB=true
       - WORKER_HEALTH_HOST=127.0.0.1
       - WORKER_HEALTH_PORT=8081
+      - CRAWLTROVE_CORE_URL=http://crawltrove:8000
+      - WORKER_ALLOW_INSECURE_CORE=true
       - ARTIFACT_STORE_BACKEND=s3
       - S3_BUCKET=${S3_BUCKET:-crawltrove-artifacts}
       - S3_ENDPOINT_URL=http://minio:9000
@@ -275,6 +277,8 @@ services:
       - WORKER_ALLOW_INSECURE_DB=true
       - WORKER_HEALTH_HOST=127.0.0.1
       - WORKER_HEALTH_PORT=8081
+      - CRAWLTROVE_CORE_URL=http://crawltrove:8000
+      - WORKER_ALLOW_INSECURE_CORE=true
       - ARTIFACT_STORE_BACKEND=s3
       - S3_BUCKET=${S3_BUCKET:-crawltrove-artifacts}
       - S3_ENDPOINT_URL=http://minio:9000

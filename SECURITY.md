@@ -26,6 +26,13 @@ network-sensitive service.
   application by default.
 - The Compose runtime launches Chromium as a non-root user with its sandbox
   enabled and serves captured HTML only as plain-text attachments.
+- Remote workers must use enrolled least-privilege PostgreSQL identities,
+  verified TLS client credentials, and worker-scoped S3 prefixes. The local
+  Compose insecure-database override is not suitable for production.
+- Persisted browser profiles require `SESSION_ENCRYPTION_KEY`; rotate with
+  `SESSION_ENCRYPTION_PREVIOUS_KEYS` and protect both as production secrets.
+- Live-session bearer tokens are scoped, single-use, short-lived credentials.
+  Do not log or forward them outside the operator session.
 - `ALLOW_PRIVATE_NETWORKS=true` removes that target restriction and must only be
   used by a trusted operator.
 - This project is not presented as a hardened multi-tenant scraping SaaS.

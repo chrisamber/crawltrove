@@ -252,6 +252,27 @@ async def get_job(job_id: UUID) -> Optional[dict]:
         job["usage"] = [{"provider": row["provider"], "meter": row["meter"],
                          "limit": float(row["limit_value"]), "reserved": float(row["reserved_value"]),
                          "consumed": float(row["consumed_value"])} for row in usage]
+        session = await conn.fetchrow(
+            """SELECT s.id, s.backend, s.state, s.expires_at
+               FROM live_sessions s JOIN crawl_tasks t ON t.id = s.task_id
+               WHERE t.job_id = $1
+                 AND s.state IN ('starting','waiting','connected','resuming')
+                 AND s.expires_at > now()
+               ORDER BY s.created_at DESC LIMIT 1""",
+            job_id,
+        )
+        job["activeSession"] = ({
+            "id": str(session["id"]), "backend": session["backend"],
+            "state": session["state"], "expiresAt": session["expires_at"],
+        } if session is not None else None)
+        workers = await conn.fetch(
+            """SELECT id, state, capabilities, last_seen_at FROM workers
+               WHERE state IN ('active','draining','incompatible') ORDER BY id"""
+        )
+        job["workers"] = [{
+            "id": row["id"], "state": row["state"],
+            "capabilities": list(row["capabilities"]), "lastSeenAt": row["last_seen_at"],
+        } for row in workers]
         return job
 
 
@@ -275,6 +296,13 @@ async def request_cancel(job_id: UUID) -> bool:
                    RETURNING id""",
                 job_id,
             )
+            if cancelled:
+                await conn.execute(
+                    """UPDATE live_sessions SET state = 'cancelled', closed_at = now()
+                       WHERE task_id = ANY($1::UUID[])
+                         AND state NOT IN ('closed','expired','cancelled')""",
+                    [row["id"] for row in cancelled],
+                )
             active = await conn.fetchval(
                 "SELECT EXISTS (SELECT 1 FROM crawl_tasks "
                 "WHERE job_id = $1 AND state = 'leased')",
@@ -328,6 +356,91 @@ async def list_pages(
             page["metadata"] = _loads(page["metadata"])
         pages.append(page)
     return pages
+
+
+async def list_events(job_id: UUID, after: int = 0, limit: int = 100) -> Optional[list[dict]]:
+    pool = await require_pool()
+    async with pool.acquire() as conn:
+        if not await conn.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM crawl_jobs WHERE id = $1)", job_id,
+        ):
+            return None
+        rows = await conn.fetch(
+            """SELECT id, task_id, event, metadata, created_at FROM crawl_events
+               WHERE job_id = $1 AND id > $2 ORDER BY id LIMIT $3""",
+            job_id, max(0, after), max(1, min(limit, 500)),
+        )
+    return [{**dict(row), "metadata": _loads(row["metadata"])} for row in rows]
+
+
+async def job_state(job_id: UUID) -> str | None:
+    """Read only the durable state needed by long-lived event streams."""
+    pool = await require_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval("SELECT state FROM crawl_jobs WHERE id = $1", job_id)
+
+
+async def retry_failures(job_id: UUID, task_ids: tuple[UUID, ...] = ()) -> UUID:
+    """Create a new immutable crawl from retryable failed URLs in one prior job."""
+    pool = await require_pool()
+    async with pool.acquire() as conn:
+        source = await conn.fetchrow("SELECT config FROM crawl_jobs WHERE id = $1", job_id)
+        if source is None:
+            raise KeyError("crawl job not found")
+        selected_ids = tuple(dict.fromkeys(task_ids))
+        rows = await conn.fetch(
+            """SELECT id, original_url FROM crawl_tasks
+               WHERE job_id = $1
+                 AND state IN ('http_error','extraction_failed','permanent_failed')
+                 AND error_class IN ('transport','http','extraction')
+                 AND (cardinality($2::UUID[]) = 0 OR id = ANY($2::UUID[]))
+               ORDER BY discovery_seq LIMIT 100""",
+            job_id, list(selected_ids),
+        )
+    if selected_ids and len(rows) != len(selected_ids):
+        raise ValueError("one or more selected tasks are not retryable failures")
+    if not rows:
+        raise ValueError("crawl job has no selected retryable failures")
+    source_config = CrawlConfig.model_validate(_loads(source["config"]))
+    config = source_config.model_copy(update={
+        "url": rows[0]["original_url"],
+        "limit": min(source_config.limit, len(rows)),
+    })
+    new_job_id = await submit_job(config, trigger="retry_failures")
+    if len(rows) == 1:
+        return new_job_id
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            sequence = 1
+            for row in rows[1:]:
+                normalized = normalize.normalize_url(row["original_url"])
+                origin = normalize.origin_key(normalized)
+                await conn.execute(
+                    "INSERT INTO crawl_origins (origin_key) VALUES ($1) ON CONFLICT DO NOTHING",
+                    origin,
+                )
+                inserted = await conn.fetchval(
+                    """INSERT INTO crawl_tasks
+                       (id, job_id, original_url, normalized_url, url_hash, origin_key,
+                        depth, discovery_seq, state, max_attempts, required_capabilities)
+                       VALUES ($1,$2,$3,$4,$5,$6,0,$7,'pending',$8,$9::TEXT[])
+                       ON CONFLICT (job_id, url_hash) DO NOTHING RETURNING id""",
+                    uuid.uuid4(), new_job_id, row["original_url"], normalized,
+                    hashlib.sha256(normalized.encode("utf-8")).digest(), origin, sequence,
+                    config.acquisition.maxAttempts, _required_capabilities(config.model_dump()),
+                )
+                if inserted is not None:
+                    sequence += 1
+            await conn.execute(
+                """UPDATE crawl_jobs SET discovered_count = $2, next_discovery_seq = $2
+                   WHERE id = $1""",
+                new_job_id, sequence,
+            )
+            await _event(
+                conn, new_job_id, None, "job_retried_failures",
+                {"source_job_id": str(job_id), "task_count": sequence},
+            )
+    return new_job_id
 
 
 _TERMINAL_TASK_STATES = (
@@ -946,6 +1059,102 @@ async def claim_task(
                 config=config, byte_allowance=byte_allowance,
                 artifact_allowance=artifact_allowance,
                 required_capabilities=frozenset(task["required_capabilities"]),
+            )
+
+
+async def start_live_session(task: ClaimedTask, *, backend: str, worker_id: str):
+    """Park a locally claimed task without requiring a remote-worker DB identity."""
+    from app.acquisition import sessions
+
+    return await sessions.wait_for_input_local(
+        task, backend=backend, worker_id=worker_id, pool=await require_pool(),
+    )
+
+
+async def close_live_session(
+    session_id: UUID, reason: str, worker_id: str | None = None,
+) -> bool:
+    from app.acquisition import sessions
+
+    return await sessions.close(
+        session_id, reason, worker_id=worker_id, pool=await require_pool(),
+    )
+
+
+async def resume_live_session(session_id: UUID, worker_id: str) -> Optional[ClaimedTask]:
+    """Re-fence a parked local task so the retained context can complete it."""
+    pool = await require_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """SELECT t.*, j.config AS job_config, j.deadline_at,
+                          j.max_bytes, j.downloaded_bytes, j.reserved_bytes,
+                          j.max_artifact_bytes, j.artifact_bytes,
+                          j.reserved_artifact_bytes, j.cancel_requested_at
+                   FROM live_sessions s
+                   JOIN crawl_tasks t ON t.id = s.task_id
+                   JOIN crawl_jobs j ON j.id = t.job_id
+                   WHERE s.id = $1 AND s.worker_id IS NULL AND s.state = 'resuming'
+                     AND s.expires_at > now() AND t.state = 'waiting_input'
+                     AND j.cancel_requested_at IS NULL AND j.deadline_at > now()
+                   FOR UPDATE OF s, t, j""",
+                session_id,
+            )
+            if row is None:
+                return None
+            await conn.fetchrow(
+                "SELECT origin_key FROM crawl_origins WHERE origin_key = $1 FOR UPDATE",
+                row["origin_key"],
+            )
+            if await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM crawl_origin_leases WHERE origin_key = $1)",
+                row["origin_key"],
+            ):
+                return None
+            byte_allowance = min(
+                row["max_bytes"] - row["downloaded_bytes"] - row["reserved_bytes"],
+                _response_cap(row["normalized_url"]),
+            )
+            artifact_allowance = min(
+                row["max_artifact_bytes"] - row["artifact_bytes"]
+                - row["reserved_artifact_bytes"],
+                INLINE_ARTIFACT_CAP,
+            )
+            if byte_allowance <= 0 or artifact_allowance <= 0:
+                return None
+            token = uuid.uuid4()
+            await conn.execute(
+                """UPDATE crawl_jobs SET reserved_bytes = reserved_bytes + $2,
+                       reserved_artifact_bytes = reserved_artifact_bytes + $3
+                   WHERE id = $1""",
+                row["job_id"], byte_allowance, artifact_allowance,
+            )
+            await conn.execute(
+                """UPDATE crawl_tasks SET state = 'leased', lease_owner = $2,
+                       lease_token = $3, lease_expires_at = now() + ($4 * interval '1 second'),
+                       byte_budget_reserved = $5, artifact_budget_reserved = $6,
+                       updated_at = now() WHERE id = $1""",
+                row["id"], worker_id, token, LEASE_SECONDS, byte_allowance,
+                artifact_allowance,
+            )
+            await conn.execute(
+                """INSERT INTO crawl_origin_leases
+                       (origin_key, task_id, lease_token, expires_at)
+                   VALUES ($1,$2,$3,now() + ($4 * interval '1 second'))""",
+                row["origin_key"], row["id"], token, LEASE_SECONDS,
+            )
+            await conn.execute(
+                "UPDATE live_sessions SET last_seen_at = now() WHERE id = $1",
+                session_id,
+            )
+            config = _loads(row["job_config"])
+            return ClaimedTask(
+                id=row["id"], job_id=row["job_id"], url=row["original_url"],
+                normalized_url=row["normalized_url"], origin_key=row["origin_key"],
+                depth=row["depth"], attempt=row["attempt_count"], lease_token=token,
+                deadline_at=row["deadline_at"], config=config,
+                byte_allowance=byte_allowance, artifact_allowance=artifact_allowance,
+                required_capabilities=frozenset(row["required_capabilities"]),
             )
 
 

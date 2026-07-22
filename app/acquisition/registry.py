@@ -130,11 +130,14 @@ def env_registry(scraper, *, proxy_pool=None,
     from app.acquisition.firecrawl import FirecrawlAdapter
     from app.acquisition.local import LocalAdapter
 
+    brightdata_zone = (
+        os.getenv("BRIGHTDATA_UNLOCKER_ZONE") or os.getenv("BRIGHTDATA_ZONE")
+    )
     return ProviderRegistry({
         "local": LocalAdapter(scraper, proxy_pool),
         "firecrawl": FirecrawlAdapter(os.getenv("FIRECRAWL_API_KEY")),
         "brightdata": BrightDataAdapter(
-            os.getenv("BRIGHTDATA_API_KEY"), os.getenv("BRIGHTDATA_ZONE"),
+            os.getenv("BRIGHTDATA_API_KEY"), brightdata_zone,
         ),
         "browserbase": BrowserbaseAdapter(
             os.getenv("BROWSERBASE_API_KEY", ""), os.getenv("BROWSERBASE_PROJECT_ID", ""),

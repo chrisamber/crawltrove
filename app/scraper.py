@@ -127,6 +127,138 @@ class BrowserRuntime:
             elif hasattr(manager, "__aexit__"):
                 await manager.__aexit__(None, None, None)
 
+    def _new_transport(self, proxy: Optional[Dict[str, str]]):
+        if proxy is None:
+            return self._transport_factory()
+        return self._transport_factory(
+            proxy=proxy["server"],
+            proxy_auth=(proxy["username"], proxy["password"])
+            if "username" in proxy else None,
+        )
+
+    async def _new_guarded_page(
+        self,
+        *,
+        proxy: Optional[Dict[str, str]],
+        max_decoded_bytes: int,
+        blocked_navigations: list[str],
+    ) -> tuple[Any, Any, Any]:
+        """Create one context whose HTTP traffic can only use the pinned fetcher."""
+        transport = self._new_transport(proxy)
+        context = None
+        remaining_bytes = [max_decoded_bytes]
+        try:
+            context_options = _context_kwargs()
+            if proxy is not None:
+                context_options["proxy"] = proxy
+            context = await self._browser.new_context(**context_options)
+
+            async def guard_request(route):
+                request = route.request
+                if not request.url.startswith(("http://", "https://")):
+                    await route.abort("blockedbyclient")
+                    return
+                body = getattr(request, "post_data_buffer", None)
+                try:
+                    response = await transport.fetch_request(
+                        request.url, request.method, headers=dict(request.headers),
+                        data=body, max_decoded_bytes=remaining_bytes[0],
+                    )
+                except UnsafeUrlError:
+                    response = None
+                if response is None:
+                    await route.abort("blockedbyclient")
+                    if request.is_navigation_request():
+                        blocked_navigations.append(request.url)
+                    return
+                body = response["content"]
+                if len(body) > remaining_bytes[0]:
+                    await route.abort("blockedbyclient")
+                    return
+                remaining_bytes[0] -= len(body)
+                headers = {
+                    name: value for name, value in response["headers"].items()
+                    if name.lower() not in {
+                        "connection", "keep-alive", "proxy-authenticate",
+                        "proxy-authorization", "te", "trailer",
+                        "transfer-encoding", "upgrade", "content-encoding",
+                        "content-length",
+                    }
+                }
+                await route.fulfill(
+                    status=response["status"], headers=headers, body=body,
+                )
+
+            await context.route("**/*", guard_request)
+            await context.route_web_socket("**/*", _guard_browser_websocket)
+            page = await context.new_page()
+            try:
+                await stealth_async(page)
+            except Exception:
+                pass
+            return context, page, transport
+        except Exception:
+            if context is not None and hasattr(context, "close"):
+                await context.close()
+            await transport.close()
+            raise
+
+    async def open_owned_session(
+        self,
+        url: str,
+        *,
+        artifact_put: Callable[[bytes], Awaitable[str]],
+        proxy: Optional[Dict[str, str]] = None,
+        max_decoded_bytes: int = MAX_DOM_BYTES,
+        artifact_budget_bytes: int = 20 * 1024 * 1024,
+    ) -> Any:
+        """Open a retained, guarded browser page for one human session.
+
+        The returned context holds this runtime's context permit until it is
+        closed, preventing an intervention session from bypassing render
+        capacity.
+        """
+        from app.acquisition.owned_session import OwnedSessionContext
+
+        await ensure_public_url(url)
+        await self.start()
+        await self._contexts.acquire()
+        context = page = transport = None
+        blocked_navigations: list[str] = []
+        try:
+            async with asyncio.timeout(90):
+                context, page, transport = await self._new_guarded_page(
+                    proxy=proxy,
+                    max_decoded_bytes=max_decoded_bytes,
+                    blocked_navigations=blocked_navigations,
+                )
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+
+            async def release() -> None:
+                try:
+                    await context.close()
+                finally:
+                    try:
+                        await transport.close()
+                    finally:
+                        self._contexts.release()
+
+            return OwnedSessionContext(
+                context, page, artifact_put=artifact_put,
+                artifact_budget_bytes=artifact_budget_bytes, release=release,
+            )
+        except Exception as exc:
+            if context is not None and hasattr(context, "close"):
+                await context.close()
+            if transport is not None:
+                await transport.close()
+            self._contexts.release()
+            if blocked_navigations:
+                raise UnsafeUrlError(
+                    "Refusing browser navigation to a non-public network address"
+                ) from exc
+            raise
+
     async def render(self, url: str, *, wait_for_ms: int = 1000,
                      actions: Optional[List[Dict[str, Any]]] = None,
                      capture_screenshot: bool = False,
@@ -138,63 +270,15 @@ class BrowserRuntime:
         await self.start()
         blocked_navigations = []
         context = None
-        transport = self._transport_factory(
-            proxy=proxy["server"],
-            proxy_auth=(proxy["username"], proxy["password"])
-            if proxy and "username" in proxy else None,
-        ) if proxy else self._transport_factory()
-        remaining_bytes = [max_decoded_bytes]
+        transport = None
         try:
             async with self._contexts:
                 async with asyncio.timeout(90):
-                    context_options = _context_kwargs()
-                    if proxy is not None:
-                        context_options["proxy"] = proxy
-                    context = await self._browser.new_context(**context_options)
-
-                    async def guard_request(route):
-                        request = route.request
-                        if not request.url.startswith(("http://", "https://")):
-                            await route.abort("blockedbyclient")
-                            return
-                        body = getattr(request, "post_data_buffer", None)
-                        try:
-                            response = await transport.fetch_request(
-                                request.url, request.method, headers=dict(request.headers),
-                                data=body, max_decoded_bytes=remaining_bytes[0],
-                            )
-                        except UnsafeUrlError:
-                            response = None
-                        if response is None:
-                            await route.abort("blockedbyclient")
-                            if request.is_navigation_request():
-                                blocked_navigations.append(request.url)
-                            return
-                        body = response["content"]
-                        if len(body) > remaining_bytes[0]:
-                            await route.abort("blockedbyclient")
-                            return
-                        remaining_bytes[0] -= len(body)
-                        headers = {
-                            name: value for name, value in response["headers"].items()
-                            if name.lower() not in {
-                                "connection", "keep-alive", "proxy-authenticate",
-                                "proxy-authorization", "te", "trailer",
-                                "transfer-encoding", "upgrade", "content-encoding",
-                                "content-length",
-                            }
-                        }
-                        await route.fulfill(
-                            status=response["status"], headers=headers, body=body,
-                        )
-
-                    await context.route("**/*", guard_request)
-                    await context.route_web_socket("**/*", _guard_browser_websocket)
-                    page = await context.new_page()
-                    try:
-                        await stealth_async(page)
-                    except Exception:
-                        pass
+                    context, page, transport = await self._new_guarded_page(
+                        proxy=proxy,
+                        max_decoded_bytes=max_decoded_bytes,
+                        blocked_navigations=blocked_navigations,
+                    )
                     nav_response = await page.goto(
                         url, wait_until="domcontentloaded", timeout=60000
                     )
@@ -275,7 +359,8 @@ class BrowserRuntime:
         finally:
             if context is not None and hasattr(context, "close"):
                 await context.close()
-            await transport.close()
+            if transport is not None:
+                await transport.close()
             self._completed_contexts += 1
             if self._completed_contexts >= self._restart_after:
                 self._completed_contexts = 0

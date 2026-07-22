@@ -15,6 +15,7 @@ from app.crawl.worker import CrawlWorker
 from app.acquisition.proxy import RemoteProxyPool
 from app.acquisition.registry import env_registry
 from app.acquisition.router import AcquisitionRouter
+from app.acquisition.owned_session import OwnedSessionRunner
 from app.artifacts.base import ArtifactIntegrityError
 from app.scraper import WebScraper
 from app.worker_config import WorkerConfig
@@ -50,6 +51,12 @@ class _ArtifactRepository:
 
     async def claim_task(self, worker_id: str, capabilities: set[str]) -> Any:
         task = await self._repository.claim_task(worker_id, capabilities)
+        if task is not None:
+            self._allowances[task.id] = task.artifact_allowance
+        return task
+
+    async def resume_live_session(self, session_id: Any, worker_id: str) -> Any:
+        task = await self._repository.resume_live_session(session_id, worker_id)
         if task is not None:
             self._allowances[task.id] = task.artifact_allowance
         return task
@@ -110,6 +117,7 @@ class WorkerRuntime:
         self._health_server: asyncio.AbstractServer | None = None
         self.health_port: int | None = None
         self._stop = asyncio.Event()
+        self._session_runner = None
         artifact_repository = _ArtifactRepository(repository, artifacts)
         monitored_repository = _HeartbeatRepository(artifact_repository, self)
         proxy_pool = (RemoteProxyPool.from_environment(monitored_repository)
@@ -131,6 +139,13 @@ class WorkerRuntime:
             proxy_pool=proxy_pool,
             acquisition_router=AcquisitionRouter(self.registry, monitored_repository, self.scraper),
         )
+        core_url = os.getenv("CRAWLTROVE_CORE_URL", "").strip()
+        if "browser" in config.capabilities and core_url:
+            self._session_runner = OwnedSessionRunner(
+                config.worker_id, monitored_repository, self.scraper, artifacts,
+                core_url=core_url,
+            )
+            self.worker.session_handler = self._session_runner
 
     async def tick(self) -> bool:
         """Perform at most one claim. Incompatible and draining workers never claim."""
@@ -305,6 +320,8 @@ class WorkerRuntime:
             self._health_server.close()
             await self._health_server.wait_closed()
             self._health_server = None
+        if self._session_runner is not None:
+            await self._session_runner.close()
         close = getattr(self.scraper, "close", None)
         if close is not None:
             result = close()

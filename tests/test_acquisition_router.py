@@ -46,6 +46,10 @@ class _Repository:
     def __init__(self):
         self.reserved = []
         self.finished = []
+        self.browser_navigation_allowed = True
+
+    async def reserve_browser_navigation(self, task_id, lease_token):
+        return self.browser_navigation_allowed
 
     async def reserve_acquisition_attempt(self, task_id, lease_token, route, cost):
         self.reserved.append((task_id, lease_token, route, dict(cost)))
@@ -109,6 +113,32 @@ async def test_router_falls_back_only_after_a_retryable_failure(monkeypatch):
     assert result.markdown == "<p>ok</p>"
     assert [row[2] for row in repository.reserved] == ["local_browser", "firecrawl_scrape"]
     assert [row[2] for row in repository.finished] == ["retryable_failure", "succeeded"]
+
+
+async def test_router_reserves_browser_budget_before_local_navigation(monkeypatch):
+    from app.acquisition.providers import NativeCost, ProviderFailure, ProviderResult
+    from app.acquisition.registry import ProviderRegistry
+    from app.acquisition.router import AcquisitionRouter
+
+    async def public(_url):
+        return None
+
+    monkeypatch.setattr("app.acquisition.router.ensure_public_url", public)
+    local = _Adapter(
+        "local", {"local_browser"},
+        [ProviderResult("<p>never</p>", "https://example.com", 200, NativeCost({}))],
+        NativeCost({}),
+    )
+    repository = _Repository()
+    repository.browser_navigation_allowed = False
+
+    with pytest.raises(ProviderFailure, match="browser_budget_exhausted"):
+        await AcquisitionRouter(
+            ProviderRegistry({"local": local}), repository, _Scraper(),
+        ).acquire(_router_task(engine="browser"))
+
+    assert local.calls == []
+    assert repository.reserved == []
 
 
 async def test_local_challenge_transitions_once_to_static_block_routes(monkeypatch):
@@ -441,3 +471,13 @@ async def test_provider_subattempts_preserve_worker_attempt_numbers(db):
             "WHERE task_id = $1 ORDER BY started_at, attempt_number", task.id,
         )
     assert [row["attempt_number"] for row in numbers] == [1, 1001, 2]
+
+
+def test_env_registry_uses_release_brightdata_zone_name(monkeypatch):
+    from app.acquisition.registry import env_registry
+
+    monkeypatch.setenv("BRIGHTDATA_API_KEY", "test-key")
+    monkeypatch.setenv("BRIGHTDATA_UNLOCKER_ZONE", "test-zone")
+    monkeypatch.delenv("BRIGHTDATA_ZONE", raising=False)
+    registry = env_registry(_Scraper())
+    assert registry.health()["brightdata"] == {"state": "configured"}

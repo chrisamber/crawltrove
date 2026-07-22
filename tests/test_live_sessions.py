@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+import httpx
 import pytest
 
 from tests.conftest import requires_db
@@ -110,6 +111,41 @@ def test_session_surface_cannot_contain_raw_remote_control_urls():
     assert not {"connectUrl", "wsUrl", "cdpUrl", "vncUrl"} & set(snapshot.__dict__)
 
 
+def test_owned_session_actions_are_bounded_and_never_accept_code_execution():
+    from app.acquisition.owned_session import validate_action
+
+    assert validate_action({"action": "click", "selector": "#continue"}) == {
+        "action": "click", "selector": "#continue",
+    }
+    for action in (
+        {"action": "evaluate", "code": "alert(1)"},
+        {"action": "fill", "selector": "#x", "text": "x" * 4097},
+        {"action": "scroll", "delta": 10_001},
+    ):
+        with pytest.raises(ValueError):
+            validate_action(action)
+
+
+@requires_db
+async def test_job_session_token_exposes_only_same_origin_open_path(db, active_claim):
+    from app.acquisition import sessions
+    from app.main import app
+
+    handle = await sessions.wait_for_input(
+        active_claim, backend="owned", worker_id="browser-1", ttl_seconds=900, pool=db,
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        issued = await client.post(
+            f"/api/crawl/{active_claim.job_id}/sessions/{handle.id}/token"
+        )
+        assert issued.status_code == 200
+        opened = issued.json()["url"]
+        assert opened.startswith(f"/api/acquisition/sessions/{handle.id}/open?")
+        assert not any(value in opened.lower() for value in ("connecturl", "wsurl", "cdp", "vnc"))
+        assert (await client.get(opened)).status_code == 200
+        assert (await client.get(opened)).status_code == 401
+
+
 @requires_db
 async def test_worker_role_cannot_read_session_rows(db):
     async with db.acquire() as conn:
@@ -117,3 +153,113 @@ async def test_worker_role_cannot_read_session_rows(db):
             "SELECT has_table_privilege('crawltrove_worker', 'live_session_tokens', 'SELECT')"
         )
     assert can_read is False
+
+
+@requires_db
+async def test_local_session_resumes_through_a_new_completion_fence(db, active_claim):
+    from app.acquisition import sessions
+    from app.crawl import repository
+    from app.crawl.types import TaskResult
+
+    async with db.acquire() as conn:
+        await conn.execute("DELETE FROM workers WHERE id = 'browser-1'")
+    handle = await sessions.wait_for_input_local(
+        active_claim, backend="owned", worker_id="browser-1", pool=db,
+    )
+    assert await sessions.request_resume(handle.id, pool=db)
+    resumed = await repository.resume_live_session(handle.id, "browser-1")
+    assert resumed is not None and resumed.attempt == active_claim.attempt
+    assert await repository.complete_task(
+        resumed.id, resumed.lease_token,
+        TaskResult("https://example.com/complete", 200, "done", "complete"),
+    )
+    assert await sessions.close_completed(handle.id, pool=db)
+    async with db.acquire() as conn:
+        task = await conn.fetchrow(
+            "SELECT state, attempt_count FROM crawl_tasks WHERE id = $1", active_claim.id,
+        )
+        state = await conn.fetchval("SELECT state FROM live_sessions WHERE id = $1", handle.id)
+    assert dict(task) == {"state": "succeeded", "attempt_count": active_claim.attempt}
+    assert state == "closed"
+
+
+@requires_db
+async def test_worker_shutdown_terminalizes_remote_wait_and_job_counters(db, active_claim):
+    from app.acquisition import sessions
+
+    handle = await sessions.wait_for_input(
+        active_claim, backend="owned", worker_id="browser-1", pool=db,
+    )
+    async with db.acquire() as conn:
+        assert await conn.fetchval(
+            "SELECT worker_api.close_live_session($1, 'expired')", handle.id,
+        )
+        task = await conn.fetchrow(
+            "SELECT state, error_code FROM crawl_tasks WHERE id = $1", active_claim.id,
+        )
+        job = await conn.fetchrow(
+            "SELECT terminal_count, failed_count FROM crawl_jobs WHERE id = $1",
+            active_claim.job_id,
+        )
+        session_state = await conn.fetchval(
+            "SELECT state FROM live_sessions WHERE id = $1", handle.id,
+        )
+    assert dict(task) == {
+        "state": "permanent_failed", "error_code": "human_input_timeout",
+    }
+    assert dict(job) == {"terminal_count": 1, "failed_count": 1}
+    assert session_state == "expired"
+
+
+@requires_db
+async def test_cancel_and_expiry_terminalize_parked_tasks(db, active_claim):
+    from app.acquisition import sessions
+    from app.crawl import repository
+    from app.crawl.config import CrawlConfig
+
+    cancelled = await sessions.wait_for_input_local(
+        active_claim, backend="owned", worker_id="browser-1", pool=db,
+    )
+    assert await sessions.cancel(cancelled.id, pool=db)
+    async with db.acquire() as conn:
+        task = await conn.fetchrow(
+            "SELECT state, error_code FROM crawl_tasks WHERE id = $1", active_claim.id,
+        )
+    assert dict(task) == {"state": "cancelled", "error_code": "human_input_cancelled"}
+
+    await repository.submit_job(CrawlConfig(url="https://example.org/second", engine="browser"))
+    expiring_claim = await repository.claim_task("browser-1", {"http", "browser"})
+    assert expiring_claim is not None
+    expiring = await sessions.wait_for_input_local(
+        expiring_claim, backend="owned", worker_id="browser-1", pool=db,
+    )
+    async with db.acquire() as conn:
+        await conn.execute(
+            "UPDATE live_sessions SET expires_at = now() - interval '1 second' WHERE id = $1",
+            expiring.id,
+        )
+    assert await sessions.expire_due(pool=db) == 1
+    async with db.acquire() as conn:
+        expired_task = await conn.fetchrow(
+            "SELECT state, error_code FROM crawl_tasks WHERE id = $1", expiring_claim.id,
+        )
+    assert dict(expired_task) == {
+        "state": "permanent_failed", "error_code": "human_input_timeout",
+    }
+
+
+@requires_db
+async def test_expired_session_is_not_reported_as_active_before_maintenance(db, active_claim):
+    from app.acquisition import sessions
+    from app.crawl import repository
+
+    handle = await sessions.wait_for_input_local(
+        active_claim, backend="owned", worker_id="browser-1", pool=db,
+    )
+    async with db.acquire() as conn:
+        await conn.execute(
+            "UPDATE live_sessions SET expires_at = now() - interval '1 second' WHERE id = $1",
+            handle.id,
+        )
+    job = await repository.get_job(active_claim.job_id)
+    assert job is not None and job["activeSession"] is None

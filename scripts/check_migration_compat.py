@@ -22,6 +22,8 @@ UPGRADE = (
     "0008_managed_acquisition.sql",
     "0009_proxy_worker_protocol.sql",
     "0010_remote_managed_acquisition.sql",
+    "0011_session_worker_protocol.sql",
+    "0012_queue_claim_performance.sql",
 )
 TEST_DATABASE = "crawltrove_migration_compat_test"
 
@@ -108,9 +110,14 @@ async def verify(admin_dsn: str, database: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--admin-dsn", required=True)
+    parser.add_argument(
+        "--admin-dsn", default=os.getenv("V040_MIGRATION_ADMIN_DSN"),
+    )
     parser.add_argument("--database", default=TEST_DATABASE)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.admin_dsn:
+        parser.error("--admin-dsn or V040_MIGRATION_ADMIN_DSN is required")
+    return args
 
 
 if __name__ == "__main__":

@@ -39,6 +39,7 @@ def test_migration_compatibility_check_exercises_the_additive_upgrade_boundary()
     for migration in (
         "0001_init.sql", "0002_fts.sql", "0003_research_runs.sql",
         "0004_durable_crawl.sql", "0010_remote_managed_acquisition.sql",
+        "0011_session_worker_protocol.sql", "0012_queue_claim_performance.sql",
     ):
         assert migration in source
     assert "scrape_runs" in source
@@ -54,3 +55,17 @@ def test_migration_compatibility_database_guard_is_test_only():
     assert is_compat_database("crawltrove_migration_compat_test")
     assert not is_compat_database("another_test")
     assert not is_compat_database("production")
+
+
+def test_v040_release_metadata_is_complete():
+    assert (ROOT / "app/VERSION").read_text(encoding="utf-8").strip() == "0.4.0"
+    notes = (ROOT / "docs/release-v0.4.0.md").read_text(encoding="utf-8")
+    for heading in (
+        "## Migration", "## Remote workers", "## Provider budgets",
+        "## Human intervention", "## Operations", "## Evaluation",
+        "## Known limitations",
+    ):
+        assert heading in notes
+    assert "100,000" in notes
+    assert "Firecrawl" in notes
+    assert "Crawl4AI" in notes
