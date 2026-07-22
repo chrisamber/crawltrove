@@ -75,8 +75,8 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
-      - name: Build supported Docker runtime
-        run: docker compose build
+      - name: Build core and remote worker images
+        run: docker compose build crawltrove worker-init worker-standard worker-browser
 
       - name: Verify artifact migration command
         run: |

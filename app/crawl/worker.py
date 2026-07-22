@@ -25,11 +25,13 @@ class CrawlWorker:
         self.discover = discover
         self.robots_fetch = robots_fetch
         self.robots_sleep = robots_sleep
+        self.active_lease: tuple[Any, Any] | None = None
 
     async def run_once(self) -> bool:
         task = await self.repository.claim_task(self.worker_id, self.capabilities)
         if task is None:
             return False
+        self.active_lease = (task.id, task.lease_token)
 
         config = CrawlConfig.model_validate(task.config)
         lease_lost = asyncio.Event()
@@ -114,6 +116,7 @@ class CrawlWorker:
                 await heartbeat
             except asyncio.CancelledError:
                 pass
+            self.active_lease = None
 
     async def _heartbeat(self, task: Any, lease_lost: asyncio.Event) -> None:
         while True:

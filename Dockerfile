@@ -11,7 +11,7 @@ COPY apps/app/ ./
 RUN pnpm build
 
 
-FROM mcr.microsoft.com/playwright/python:v1.60.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.60.0-jammy AS core
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -48,3 +48,43 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+FROM python:3.11-slim AS worker-standard
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /workspace
+
+RUN groupadd --gid 1000 pwuser \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /usr/sbin/nologin pwuser
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app/ ./app/
+
+USER 1000:1000
+
+EXPOSE 8081
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health/live', timeout=3)"
+
+CMD ["python", "-m", "app.worker_main", "--config", "/run/crawltrove-workers/standard.json"]
+
+
+FROM core AS worker-browser
+
+# A remote worker does not repair shared application volumes. It receives only
+# its read-only enrollment bundle and uses the existing Playwright pwuser.
+USER 1000:1000
+ENTRYPOINT []
+
+EXPOSE 8081
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health/live', timeout=3)"
+
+CMD ["sh", "-ec", "python -c 'from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); b.close(); p.stop()' && exec python -m app.worker_main --config /run/crawltrove-workers/browser.json"]

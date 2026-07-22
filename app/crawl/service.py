@@ -35,9 +35,13 @@ class CrawlService:
         return job_id
 
     async def start(self) -> None:
-        if self._worker_task is not None:
+        if self._maintenance_task is not None:
             return
-        self._worker_task = asyncio.create_task(self._run_worker())
+        remote_workers = os.environ.get("CRAWLTROVE_REMOTE_WORKERS", "").lower() in {
+            "1", "true", "yes", "on",
+        }
+        if not remote_workers:
+            self._worker_task = asyncio.create_task(self._run_worker())
         self._maintenance_task = asyncio.create_task(self._run_maintenance())
 
     async def stop(self) -> None:

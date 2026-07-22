@@ -55,6 +55,25 @@ async def test_crawl_service_polls_then_stops_cleanly():
     assert worker.calls >= 1
 
 
+async def test_remote_worker_mode_does_not_run_local_acquisition(monkeypatch):
+    from app.crawl.service import CrawlService
+
+    class Worker:
+        calls = 0
+
+        async def run_once(self):
+            self.calls += 1
+            return False
+
+    monkeypatch.setenv("CRAWLTROVE_REMOTE_WORKERS", "true")
+    worker = Worker()
+    service = CrawlService(worker=worker)
+    await service.start()
+    await asyncio.sleep(0)
+    await service.stop()
+    assert worker.calls == 0
+
+
 async def test_pages_cursor_includes_seed_and_unknown_job_is_404(monkeypatch):
     from app.main import app
     from app.routes import routes_crawl

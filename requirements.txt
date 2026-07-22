@@ -21,6 +21,7 @@ Pillow>=10.0.0
 # Persistence uses an async Postgres driver. The whole DB layer is gated
 # behind DATABASE_URL, so with it unset the service runs exactly as before.
 asyncpg>=0.29.0
+boto3>=1.35.0
 # Runtime HTTP client and corpus manifest parser.
 httpx>=0.27.0
 PyYAML>=6.0
