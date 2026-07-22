@@ -229,6 +229,22 @@ Database-backed tests automatically skip when local Postgres is unavailable.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and
 [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
+### Private managed-provider smoke
+
+The public test suite never calls managed providers. Before a private release,
+run the protected `provider-release` workflow or, in that configured
+environment, run:
+
+```bash
+.venv/bin/python scripts/smoke_providers.py --preflight
+.venv/bin/python scripts/smoke_providers.py
+```
+
+It validates the configured Postgres/S3 runtime and makes one sequential call
+to Firecrawl, Bright Data, and Browserbase against `https://example.com`.
+The command is capped at one Firecrawl credit, one Bright Data request, and one
+Browserbase minute. Higher budgets require `--allow-higher-budget` explicitly.
+
 ## Architecture
 
 `app/scraper.py` owns the scrape pipeline:
