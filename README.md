@@ -242,6 +242,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow and
 The offline corpus tools under `app/corpus/` and `scripts/` consume saved
 artifacts. The live service does not depend on the corpus pipeline.
 
+## Evaluation and limitations
+
+See the [frontier web-scraping evaluation](docs/frontier-scraping-evaluation.md)
+for live acquisition benchmarks, comparisons with managed and open-source
+scraping tools, known browser and anti-bot limitations, and the recommended
+roadmap.
+
 ## License
 
 CrawlTrove is released under the [MIT License](LICENSE).

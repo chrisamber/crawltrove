@@ -123,10 +123,22 @@ class WebScraper:
         # Tier 1: impersonated HTTP fetch, no browser
         if engine in ("auto", "http"):
             resp = await fetch.fetch_http(url)
+            if resp is None:
+                return self._error_result(
+                    url, "HTTP fetch failed (transport error)",
+                    reason="transport_error", engine_used="http",
+                )
+            status_code = resp.get("status")
+            if not isinstance(status_code, int) or not 200 <= status_code < 300:
+                return self._error_result(
+                    url, f"HTTP fetch failed (status {status_code})",
+                    reason="http_status_error", status_code=status_code,
+                    engine_used="http",
+                )
             # Documents (PDF/EPUB) are handled here — the browser tier can't
             # render them anyway (chromium downloads binaries).
-            kind = documents.sniff(resp.get("content_type", ""), url) if resp else None
-            if resp and resp["status"] == 200 and kind:
+            kind = documents.sniff(resp.get("content_type", ""), url)
+            if kind:
                 doc_result = await self._build_document_result(resp, url, kind)
                 if doc_result:
                     return doc_result
@@ -139,8 +151,6 @@ class WebScraper:
                 return self._build_result(resp["html"], url, only_main_content,
                                           engine_used="http", status_code=resp.get("status"))
             if engine == "http":
-                if resp is None:
-                    return self._error_result(url, "HTTP fetch failed (transport error)")
                 return self._build_result(resp["html"], url, only_main_content,
                                           engine_used="http", status_code=resp.get("status"))
             if not fetch.needs_browser(resp):
@@ -190,6 +200,18 @@ class WebScraper:
 
                 # Fetch content
                 html_content = await page.content()
+                if fetch.is_challenge_html(html_content):
+                    return self._error_result(
+                        url, "Browser render returned a challenge page",
+                        reason="blocked_challenge", status_code=status_code,
+                        engine_used="browser",
+                    )
+                if not isinstance(status_code, int) or not 200 <= status_code < 300:
+                    return self._error_result(
+                        url, f"Browser navigation failed (status {status_code})",
+                        reason="http_status_error", status_code=status_code,
+                        engine_used="browser",
+                    )
                 title = await page.title()
 
                 # Optional full-page screenshot for raw capture (best-effort —
@@ -200,15 +222,16 @@ class WebScraper:
                 except Exception:
                     screenshot = None
 
-                # Extract meta description
-                description = ""
+                # Query synchronously in the current DOM; locators wait for a
+                # missing element and add seconds to pages without descriptions.
                 try:
-                    description = await page.locator("meta[name='description']").get_attribute("content") or ""
+                    description = await page.evaluate("""() => {
+                        const meta = document.querySelector("meta[name='description']")
+                            || document.querySelector("meta[property='og:description']");
+                        return meta ? meta.getAttribute("content") || "" : "";
+                    }""")
                 except Exception:
-                    try:
-                        description = await page.locator("meta[property='og:description']").get_attribute("content") or ""
-                    except Exception:
-                        pass
+                    description = ""
 
                 result = self._build_result(
                     html_content, url, only_main_content,
@@ -341,18 +364,21 @@ class WebScraper:
             "_raw": {"html": html_content},
         }
 
-    def _error_result(self, url: str, error: str) -> Dict[str, Any]:
+    def _error_result(self, url: str, error: str, reason: Optional[str] = None,
+                      status_code: Optional[int] = None,
+                      engine_used: Optional[str] = None) -> Dict[str, Any]:
+        metadata = {
+            "title": "", "description": "", "url": url,
+            "reason": reason, "status_code": status_code,
+            "engine": engine_used,
+        }
         return {
             "success": False,
             "url": url,
             "error": error,
             "markdown": "",
             "html": "",
-            "metadata": {
-                "title": "",
-                "description": "",
-                "url": url
-            }
+            "metadata": metadata,
         }
 
     def clean_and_convert(self, html_content: str, base_url: str, only_main_content: bool) -> Tuple[str, str]:
