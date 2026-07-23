@@ -530,56 +530,90 @@ async def extract_structured(request: ExtractRequest):
 
 @app.post("/api/llmstxt", status_code=status.HTTP_202_ACCEPTED)
 async def start_llmstxt(request: LlmstxtRequest, background_tasks: BackgroundTasks):
-    """Generate llms.txt + llms-full.txt for a site: runs a bounded fresh crawl
-    (202 + jobId, poll GET /api/llmstxt/{jobId}) and formats the results."""
+    """Generate llms.txt + llms-full.txt via a bounded durable crawl.
+
+    Requires PostgreSQL (same as POST /api/crawl). Returns 202 + jobId; poll
+    GET /api/llmstxt/{jobId} until ``llmstxt`` is present (or ``error``).
+    """
+    from uuid import UUID
+
+    from app.acquisition.registry import ProviderUnavailable
+    from app.crawl.config import CrawlConfig
+    from app.crawl.repository import PersistenceUnavailable
+    from app.crawl.service import ProviderBudgetInvalid
+
     if not request.url.startswith(("http://", "https://")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="URL must start with http:// or https://"
+            detail="URL must start with http:// or https://",
         )
-    job_id = crawler.create_job(
-        base_url=request.url,
+    config = CrawlConfig(
+        url=request.url,
         limit=request.maxUrls,
-        max_depth=2,
-        only_main_content=True,
+        maxDepth=2,
+        onlyMainContent=True,
         engine="auto",
-        use_sitemap=request.useSitemap,
+        useSitemap=request.useSitemap,
     )
-    background_tasks.add_task(llmstxt.run, crawler, job_id)
-    return {"success": True, "jobId": job_id}
+    try:
+        job_id = await crawl_service.submit_crawl(config)
+    except UnsafeUrlError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PersistenceUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "persistence_unavailable",
+                "message": "llms.txt generation requires PostgreSQL",
+            },
+        ) from exc
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail={
+            "code": "provider_unavailable",
+            "message": "Requested provider is unavailable",
+        }) from exc
+    except ProviderBudgetInvalid as exc:
+        raise HTTPException(status_code=422, detail={
+            "code": "provider_budget_invalid",
+            "message": str(exc),
+        }) from exc
+    uid = job_id if isinstance(job_id, UUID) else UUID(str(job_id))
+    background_tasks.add_task(llmstxt.run_for_job, uid)
+    return {"success": True, "jobId": str(job_id)}
 
 
 @app.get("/api/llmstxt/{job_id}")
 async def get_llmstxt_status(job_id: str):
     """Progress of an llms.txt generation; includes the llms.txt text inline
-    (and both file paths) once the crawl finishes."""
-    job = crawler.get_job(job_id)
-    if not job:
+    (and both file paths) once formatting finishes."""
+    from uuid import UUID
+
+    from app.crawl import repository as crawl_repository
+    from app.crawl.repository import PersistenceUnavailable
+
+    try:
+        durable_id = UUID(job_id)
+    except ValueError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"llms.txt job with ID '{job_id}' not found."
+            detail=f"llms.txt job with ID '{job_id}' not found.",
         )
-    out = {
-        "success": True,
-        "jobId": job_id,
-        "status": job["status"],
-        "progress": job.get("progress", 0.0),
-        "pagesProcessed": len(job.get("results") or []),
-    }
-    if job.get("llmstxt_error"):
-        out["error"] = job["llmstxt_error"]
-    paths = job.get("llmstxt")
-    if paths:
-        out["llmstxtPath"] = paths.get("llmstxt_path")
-        out["llmsFullPath"] = paths.get("llms_full_path")
-        try:
-            with open(os.path.join(storage.LLMSTXT_DIR,
-                                   os.path.basename(paths["llmstxt_path"])),
-                      encoding="utf-8") as f:
-                out["llmstxt"] = f.read()
-        except Exception as e:
-            logger.warning("could not read llms.txt for %s: %s", job_id, e)
-    return out
+    try:
+        job = await crawl_repository.get_job(durable_id)
+    except PersistenceUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "persistence_unavailable",
+                "message": "llms.txt generation requires PostgreSQL",
+            },
+        ) from exc
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"llms.txt job with ID '{job_id}' not found.",
+        )
+    return llmstxt.status_payload(job, job_id)
 
 
 @app.post("/api/search/web")

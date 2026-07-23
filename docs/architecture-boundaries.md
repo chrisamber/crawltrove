@@ -9,15 +9,15 @@ This note fences the dual-path and silent-failure debt left after the v0.4 durab
 
 | Plane | Package | Durability | Who may use it |
 | --- | --- | --- | --- |
-| **Durable (default)** | `app/crawl/*`, `crawl_service` | Postgres jobs/tasks, leases, remote workers | All new crawl product work, scheduler, remote workers |
-| **Legacy (compat)** | `app/crawler.WebCrawler` via `app.services.crawler` | In-memory + optional file checkpoints | `/api/llmstxt`; resume of pre-v0.4 interrupted jobs only |
+| **Durable (default)** | `app/crawl/*`, `crawl_service` | Postgres jobs/tasks, leases, remote workers | All crawl product work including `/api/llmstxt`, scheduler, remote workers |
+| **Legacy (compat)** | `app/crawler.WebCrawler` via `app.services.crawler` | In-memory + optional file checkpoints | Resume of pre-v0.4 interrupted jobs only |
 
 **Rules:**
 
 1. New features that enqueue or execute crawls MUST call `app.crawl.service.submit_crawl` (or the repository APIs behind it).
 2. Only `app/crawler.py` and `app/services.py` may `import app.crawler` / `WebCrawler`. Other modules receive the singleton through `app.services` or stay on the durable path.
 3. HTTP status/resume endpoints may **read** legacy jobs for compatibility, but must not grow new legacy write paths.
-4. Flip condition for deleting `WebCrawler`: migrate `/api/llmstxt` to durable crawl (or drop the endpoint) and ship a one-shot checkpoint → durable import if any customers still need it.
+4. Flip condition for deleting `WebCrawler`: no checkpoint resume traffic for one release cycle (optionally a one-shot checkpoint → durable import).
 
 ## 2. Soft-fail vs control-plane fail
 
@@ -47,5 +47,5 @@ Prefer package-public helpers over private `_` attributes:
 
 ## 5. Revisit when
 
-- **Drop legacy crawler** when llmstxt is durable (or removed) and no checkpoint resume traffic remains for one release cycle.
+- **Drop legacy crawler** when no checkpoint resume traffic remains for one release cycle.
 - **Raise retrieval soft-fail to hard fail** only if product needs strict “empty means error” semantics for a named API consumer (metric: degradation rate on the serving path).
