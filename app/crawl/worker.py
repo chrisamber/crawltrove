@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -10,6 +11,10 @@ from app.crawl.policy import classify_robots_response, robots_decision, robots_o
 from app import fetch
 from app.acquisition.router import HumanInputRequired
 from app.acquisition.providers import ProviderFailure
+
+logger = logging.getLogger(__name__)
+
+_SAFE_ERROR_CHARS = 500
 
 
 class CrawlWorker:
@@ -165,8 +170,27 @@ class CrawlWorker:
                 await self.repository.complete_task(task.id, task.lease_token, result)
             return True
         except Exception as exc:
+            logger.exception(
+                "crawl task raised unexpected exception worker_id=%s task_id=%s job_id=%s url=%s",
+                self.worker_id,
+                getattr(task, "id", None),
+                getattr(task, "job_id", None),
+                getattr(task, "url", None),
+            )
             if not lease_lost.is_set():
-                await self._record_failure(task, {"error": str(exc)}, proxy_lease)
+                # Persist under metadata so _record_failure and classify_failure
+                # see the real exception instead of defaulting to transport_error.
+                await self._record_failure(
+                    task,
+                    {
+                        "metadata": {
+                            "reason": "worker_exception",
+                            "exception_type": type(exc).__name__,
+                            "error": str(exc)[:_SAFE_ERROR_CHARS],
+                        }
+                    },
+                    proxy_lease,
+                )
             return True
         finally:
             if lease_wait is not None and not lease_wait.done():

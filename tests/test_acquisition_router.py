@@ -61,7 +61,7 @@ class _Repository:
 
 
 class _Scraper:
-    def _build_result(self, html, url, only_main_content, engine_used, status_code):
+    def build_result(self, html, url, only_main_content, engine_used, status_code):
         return {"title": engine_used, "markdown": html, "metadata": {"engine": engine_used}}
 
 
@@ -224,6 +224,31 @@ async def test_router_marks_protocol_error_unhealthy_and_finalizes(monkeypatch):
 
     assert repository.finished[0][2] == "failed"
     assert registry.health() == {"firecrawl": {"state": "unhealthy"}}
+
+
+async def test_router_does_not_reclassify_programming_errors_as_provider_failure(monkeypatch):
+    from app.acquisition.providers import NativeCost
+    from app.acquisition.registry import ProviderRegistry
+    from app.acquisition.router import AcquisitionRouter
+
+    async def public(_url):
+        return None
+
+    monkeypatch.setattr("app.acquisition.router.ensure_public_url", public)
+    local = _Adapter(
+        "local", {"local_http"},
+        [AttributeError("adapter bug")],
+        NativeCost({}),
+    )
+    registry = ProviderRegistry({"local": local})
+    repository = _Repository()
+
+    with pytest.raises(AttributeError, match="adapter bug"):
+        await AcquisitionRouter(registry, repository, _Scraper()).acquire(_router_task())
+
+    assert repository.finished[0][2] == "failed"
+    # Programming errors must not flip the adapter to unhealthy.
+    assert registry.health()["local"]["state"] != "unhealthy"
 
 
 def test_provider_failure_retry_after_is_optional_and_preserves_existing_positionals():

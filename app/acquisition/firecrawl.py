@@ -305,7 +305,7 @@ class FirecrawlSessionBackend:
         state.cost = _cost(billed)
 
     def _build_result(self, html: str, final_url: str, status: int | None) -> Mapping[str, Any]:
-        return self._scraper._build_result(
+        return self._scraper.build_result(
             html, final_url, True, engine_used="firecrawl", status_code=status,
         )
 

@@ -53,5 +53,17 @@ Include:
 - migration notes for changed API fields, environment variables, or storage;
 - screenshots only when the dashboard changed visibly.
 
+### Review expectations
+
+For large or security-sensitive changes (authentication, storage, remote
+workers, provider integrations, CAPTCHA/session handling, database migrations,
+or operational controls):
+
+1. Prefer reviewable PRs scoped to one subsystem rather than bundling database,
+   providers, workers, UI, security, and release infrastructure together.
+2. Require at least one independent human approval before merge.
+3. Require all required CI and security checks to pass; do not merge on partial
+   green when a required gate is still failing or skipped.
+
 By contributing, you agree that your contribution is licensed under the
 repository's MIT License.

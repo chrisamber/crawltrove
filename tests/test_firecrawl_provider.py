@@ -157,7 +157,7 @@ async def test_firecrawl_interact_is_code_only_closes_and_discards_live_url(publ
     from app.acquisition.firecrawl import FirecrawlAdapter, FirecrawlSessionBackend
 
     class LocalScraper:
-        def _build_result(self, html, url, only_main_content, engine_used, **kwargs):
+        def build_result(self, html, url, only_main_content, engine_used, **kwargs):
             assert html == "<html><body>after interaction</body></html>"
             assert url == "https://example.com/final"
             assert engine_used == "firecrawl"

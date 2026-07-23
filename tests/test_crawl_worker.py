@@ -21,6 +21,10 @@ def test_failure_classification_uses_stable_error_codes():
     assert classify_failure("timeout", None).error_code == "timeout"
     assert classify_failure(None, 429).error_code == "http_429"
     assert classify_failure(None, None).error_code == "unknown_failure"
+    worker = classify_failure("worker_exception", None)
+    assert worker.retry is False
+    assert worker.error_class == "internal"
+    assert worker.error_code == "worker_exception"
 
 
 def test_backoff_uses_full_jitter_with_retry_after_bounds(monkeypatch):
@@ -176,6 +180,42 @@ async def test_worker_retries_transient_scrape_failure():
 
     assert await worker.run_once() is True
     assert repository.retried[0].error_code == "transport_error"
+
+
+async def test_worker_persists_unexpected_exception_metadata():
+    """Unexpected exceptions must reach fail_task metadata, not be lost as transport_error."""
+    class Repository:
+        def __init__(self):
+            self.failed = []
+
+        async def claim_task(self, worker_id, capabilities):
+            return _task()
+
+        async def heartbeat(self, task_id, lease_token):
+            return True
+
+        async def fail_task(self, task_id, lease_token, decision, metadata=None):
+            self.failed.append((decision, dict(metadata or {})))
+            return True
+
+        async def retry_task(self, *args, **kwargs):
+            raise AssertionError("worker exceptions must not retry as transport")
+
+    class Scraper:
+        async def scrape(self, url, **kwargs):
+            raise AttributeError("missing adapter attribute")
+
+    repository = Repository()
+    worker = CrawlWorker("worker-1", {"http"}, repository, Scraper())
+
+    assert await worker.run_once() is True
+    decision, metadata = repository.failed[0]
+    assert decision.retry is False
+    assert decision.error_class == "internal"
+    assert decision.error_code == "worker_exception"
+    assert metadata["reason"] == "worker_exception"
+    assert metadata["exception_type"] == "AttributeError"
+    assert "missing adapter attribute" in metadata["error"]
 
 
 async def test_worker_blocks_disallowed_robots_before_scraping():

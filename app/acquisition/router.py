@@ -1,6 +1,7 @@
 """Deterministic durable-acquisition route selection and attempt accounting."""
 from __future__ import annotations
 
+import logging
 from typing import Any, Mapping
 
 from app.acquisition.local import LocalAdapter
@@ -14,6 +15,8 @@ from app.acquisition.providers import (
 from app.acquisition.registry import ProviderRegistry, ProviderUnavailable
 from app.crawl.types import ClaimedTask, TaskResult
 from app.url_safety import UnsafeUrlError, ensure_public_url
+
+logger = logging.getLogger(__name__)
 
 
 class HumanInputRequired(RuntimeError):
@@ -127,11 +130,8 @@ class AcquisitionRouter:
                 failure = ProviderFailure("provider_protocol_error", False, reserved)
                 last_failure = failure
                 raise failure from exc
-            except Exception as exc:
-                self._registry.unhealthy(adapter.name)
-                failure = ProviderFailure("provider_protocol_error", False, reserved)
-                last_failure = failure
-                raise failure from exc
+            # Programming errors, repository defects, and other unexpected
+            # exceptions must surface as internal failures — not provider outages.
             finally:
                 actual = result.native_cost if result is not None else (
                     failure.native_cost if failure is not None else reserved
@@ -154,7 +154,14 @@ class AcquisitionRouter:
                         try:
                             await adapter.cancel(result.remote_session_id)
                         except Exception:
-                            pass
+                            logger.exception(
+                                "failed to cancel remote acquisition session "
+                                "provider=%s route=%s session_id=%s task_id=%s",
+                                adapter.name,
+                                route,
+                                result.remote_session_id,
+                                task.id,
+                            )
             if transition_to_static_block:
                 try:
                     return await self.acquire(task, capability="static_block")
@@ -195,7 +202,7 @@ class AcquisitionRouter:
         return "rendering" if config.get("engine") == "browser" else "ordinary"
 
     def _normalize(self, result: ProviderResult, only_main_content: bool, engine: str) -> TaskResult:
-        built = self._scraper._build_result(
+        built = self._scraper.build_result(
             result.raw_html, result.final_url, only_main_content,
             engine_used=engine, status_code=result.status_code,
         )
