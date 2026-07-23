@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import html
 import json
 import os
 import re
@@ -26,7 +27,7 @@ fieldset{border:1px solid #333;border-radius:8px;margin:12px 0;padding:12px}labe
 input{width:100%;box-sizing:border-box;background:#181a1f;color:#fff;border:1px solid #444;padding:8px}
 button{margin:4px;padding:8px 12px}img{display:block;max-width:100%;margin-top:12px;border:1px solid #333}
 #status,#result{white-space:pre-wrap;word-break:break-word;color:#bbb}
-</style></head><body><h1>Live acquisition session</h1>
+</style></head><body data-control-path="__CONTROL_PATH__"><h1>Live acquisition session</h1>
 <p id="status" role="status">Connecting…</p>
 <fieldset><legend>Page controls</legend>
 <button data-action="screenshot">Screenshot</button>
@@ -40,11 +41,9 @@ button{margin:4px;padding:8px 12px}img{display:block;max-width:100%;margin-top:1
 <fieldset><legend>Finish</legend><button data-action="resume">Resume crawl</button>
 <button data-action="cancel">Cancel session</button></fieldset>
 <div id="result" aria-live="polite"></div><img id="shot" alt="Current browser session screenshot" hidden>
-<script id="session-config" type="application/json">__SESSION_CONFIG__</script>
 <script>
 history.replaceState(null,"",location.pathname);
-const config=JSON.parse(document.getElementById("session-config").textContent);
-const path=config.controlPath,status=document.querySelector("#status"),result=document.querySelector("#result"),shot=document.querySelector("#shot");
+const path=document.body.dataset.controlPath,status=document.querySelector("#status"),result=document.querySelector("#result"),shot=document.querySelector("#shot");
 const ws=new WebSocket(`${location.protocol==="https:"?"wss":"ws"}://${location.host}${path}`);
 ws.onopen=()=>status.textContent="Connected";ws.onclose=()=>status.textContent="Disconnected";
 ws.onerror=()=>status.textContent="Connection error";
@@ -64,6 +63,17 @@ _CONTROL_PATH = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
     r"/control\?bridge=[A-Za-z0-9_-]{8,128}$"
 )
+
+
+def _control_page(control_path: str) -> str:
+    """Render the live-session page with an HTML-escaped control path attribute."""
+    if not _CONTROL_PATH.fullmatch(control_path):
+        raise ValueError("invalid control path")
+    return _CONTROL_PAGE.replace(
+        "__CONTROL_PATH__",
+        html.escape(control_path, quote=True),
+    )
+
 
 class TokenRequest(BaseModel):
     scope: str = Field(pattern="^(view|control)$")
@@ -136,14 +146,11 @@ async def open_session(session_id: UUID, token: str = Query(min_length=1, max_le
     if not _BRIDGE_TOKEN.fullmatch(bridge):
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="invalid bridge token")
     control_path = f"/api/acquisition/sessions/{session_id}/control?bridge={bridge}"
-    if not _CONTROL_PATH.fullmatch(control_path):
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="invalid control path")
-    # Embed config as a JSON text node (not an executable string replace) so the
-    # control path cannot break out of the script context.
-    config_json = json.dumps({"controlPath": control_path}, separators=(",", ":"))
-    response = HTMLResponse(
-        _CONTROL_PAGE.replace("__SESSION_CONFIG__", config_json),
-    )
+    try:
+        page = _control_page(control_path)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    response = HTMLResponse(page)
     response.headers.update({
         "Cache-Control": "no-store",
         "Referrer-Policy": "no-referrer",

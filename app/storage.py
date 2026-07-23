@@ -36,13 +36,19 @@ _SAFE_PATH_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 def _safe_path_component(value: str, *, label: str = "path component") -> Optional[str]:
     """Return *value* when it is a single safe filesystem segment, else None."""
-    if not isinstance(value, str) or not _SAFE_PATH_COMPONENT.fullmatch(value):
+    if not isinstance(value, str):
         logger.warning("rejecting unsafe %s: %r", label, value)
         return None
-    if value in {".", ".."} or "/" in value or "\\" in value:
+    # basename drops directory components so static path analysis treats the
+    # result as a single segment once the allowlist also matches.
+    segment = os.path.basename(value)
+    if segment != value or not _SAFE_PATH_COMPONENT.fullmatch(segment):
         logger.warning("rejecting unsafe %s: %r", label, value)
         return None
-    return value
+    if segment in {".", ".."}:
+        logger.warning("rejecting unsafe %s: %r", label, value)
+        return None
+    return segment
 
 
 def ensure_dirs() -> None:
