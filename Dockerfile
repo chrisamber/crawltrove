@@ -20,12 +20,14 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /workspace
 
 # OCR runtime: Tesseract + CJK language packs (eng + osd ship with the base
-# tesseract-ocr package). Pinned ahead of the pip/source layers since system
-# packages change least often, keeping this layer cache-friendly.
+# tesseract-ocr package). Also refresh OpenSSL packages from the Ubuntu
+# security pocket so image scans do not fail on fixed base CVEs.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         tesseract-ocr \
         tesseract-ocr-chi-sim tesseract-ocr-chi-tra \
         tesseract-ocr-jpn tesseract-ocr-kor \
+    && apt-get install -y --only-upgrade --no-install-recommends \
+        openssl libssl3 \
     && apt-get clean \
     && find /var/lib/apt/lists -mindepth 1 -delete
 

@@ -40,9 +40,11 @@ button{margin:4px;padding:8px 12px}img{display:block;max-width:100%;margin-top:1
 <fieldset><legend>Finish</legend><button data-action="resume">Resume crawl</button>
 <button data-action="cancel">Cancel session</button></fieldset>
 <div id="result" aria-live="polite"></div><img id="shot" alt="Current browser session screenshot" hidden>
+<script id="session-config" type="application/json">__SESSION_CONFIG__</script>
 <script>
 history.replaceState(null,"",location.pathname);
-const path=__CONTROL_PATH__,status=document.querySelector("#status"),result=document.querySelector("#result"),shot=document.querySelector("#shot");
+const config=JSON.parse(document.getElementById("session-config").textContent);
+const path=config.controlPath,status=document.querySelector("#status"),result=document.querySelector("#result"),shot=document.querySelector("#shot");
 const ws=new WebSocket(`${location.protocol==="https:"?"wss":"ws"}://${location.host}${path}`);
 ws.onopen=()=>status.textContent="Connected";ws.onclose=()=>status.textContent="Disconnected";
 ws.onerror=()=>status.textContent="Connection error";
@@ -55,6 +57,13 @@ if(action==="fill")frame.text=document.querySelector("#text").value;if(action===
 if(action==="scroll")frame.delta=Number(button.dataset.delta);ws.send(JSON.stringify(frame));}));
 </script></body></html>"""
 
+
+_BRIDGE_TOKEN = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+_CONTROL_PATH = re.compile(
+    r"^/api/acquisition/sessions/"
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"/control\?bridge=[A-Za-z0-9_-]{8,128}$"
+)
 
 class TokenRequest(BaseModel):
     scope: str = Field(pattern="^(view|control)$")
@@ -124,9 +133,16 @@ async def open_session(session_id: UUID, token: str = Query(min_length=1, max_le
     if snapshot is None or snapshot.status not in {"waiting", "connected"}:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="Session is not available")
     # The bridge is a one-use core-local channel, not a provider URL or token.
+    if not _BRIDGE_TOKEN.fullmatch(bridge):
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="invalid bridge token")
     control_path = f"/api/acquisition/sessions/{session_id}/control?bridge={bridge}"
+    if not _CONTROL_PATH.fullmatch(control_path):
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail="invalid control path")
+    # Embed config as a JSON text node (not an executable string replace) so the
+    # control path cannot break out of the script context.
+    config_json = json.dumps({"controlPath": control_path}, separators=(",", ":"))
     response = HTMLResponse(
-        _CONTROL_PAGE.replace("__CONTROL_PATH__", json.dumps(control_path)),
+        _CONTROL_PAGE.replace("__SESSION_CONFIG__", config_json),
     )
     response.headers.update({
         "Cache-Control": "no-store",

@@ -262,7 +262,11 @@ async def classify_challenge(page: Any) -> CaptchaChallenge | None:
         return CaptchaChallenge("recaptcha")
     if "hcaptcha" in markup or "h-captcha" in markup:
         return CaptchaChallenge("hcaptcha")
-    if "turnstile" in markup or "challenges.cloudflare.com" in markup:
+    # Match a host-like Cloudflare Turnstile origin rather than a bare substring.
+    if "turnstile" in markup or re.search(
+        r"(?:https?:)?//challenges\.cloudflare\.com(?:/|[\"'\s>]|$)",
+        markup,
+    ):
         return CaptchaChallenge("turnstile")
     if "data-sitekey" in markup:
         return CaptchaChallenge("managed")
