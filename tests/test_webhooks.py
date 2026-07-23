@@ -1,4 +1,4 @@
-"""Outbound run-completion webhooks (SON-124).
+"""Outbound run-completion webhooks.
 
 No network: httpx.AsyncClient is monkeypatched with a recording fake. The DB hook
 (record_run_finish -> webhooks.deliver) is covered against the live test DB.
