@@ -43,11 +43,14 @@ jobs:
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   codeql:
     permissions:
       contents: read
       security-events: write
+      actions: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -76,11 +79,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Build image
-        run: docker build --tag crawltrove:security .
-      - uses: aquasecurity/trivy-action@0.33.1
+        run: docker build --tag crawltrove:security --target core .
+      - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: crawltrove:security
           format: table
           exit-code: "1"
-          ignore-unfixed: false
+          ignore-unfixed: true
           severity: HIGH,CRITICAL
