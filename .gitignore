@@ -28,14 +28,6 @@ data/corpus/
 data/metadata/
 scrapes/
 
-# Local development metadata
-AGENTS.md
-.agents/
-.codex/
-.superpowers/
-.claude/
-.firecrawl/
-
 # Next.js dashboard
 apps/app/node_modules/
 apps/app/.next/
