@@ -240,7 +240,9 @@ async def _on_startup():
         if await pool.get_pool() is not None:
             await crawl_service.start()
     except Exception:
-        pass
+        # Keep serving scrape/health, but never hide control-plane failure.
+        # Readiness fails closed via crawl_service.maintenance_status().
+        logger.exception("durable crawl service failed to start on startup")
     app.state.scheduler_task = asyncio.create_task(scheduler.scheduler_loop())
 
 

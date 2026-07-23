@@ -35,6 +35,8 @@ class CrawlService:
         self._maintenance_last_success: float | None = None
         self._maintenance_last_error: str | None = None
         self._session_runner = None
+        self._started = False
+        self._start_error: str | None = None
         self.registry = env_registry(scraper)
         self._worker.acquisition_router = AcquisitionRouter(self.registry, repository, scraper)
         self._add_available_route_capabilities()
@@ -44,6 +46,36 @@ class CrawlService:
         if capabilities is None:
             return
         capabilities.update(self.registry.available_routes("auto"))
+
+    def wake(self) -> None:
+        """Nudge the worker loop after enqueue / retry."""
+        self._wake.set()
+
+    def maintenance_status(self) -> dict:
+        """Public snapshot for readiness and operations endpoints."""
+        task = self._maintenance_task
+        return {
+            "started": self._started,
+            "start_error": self._start_error,
+            "running": task is not None and not task.done(),
+            "last_success": self._maintenance_last_success,
+            "last_error": self._maintenance_last_error,
+        }
+
+    def worker_browser(self):
+        """Playwright browser handle when the in-process worker owns one."""
+        return getattr(getattr(self._worker, "scraper", None), "browser", None)
+
+    def leases_ready(self, *, max_age_seconds: float = 30) -> bool:
+        status = self.maintenance_status()
+        if status.get("start_error") or not status.get("started"):
+            return False
+        last_success = status.get("last_success")
+        return (
+            bool(status.get("running"))
+            and last_success is not None
+            and time.monotonic() - float(last_success) <= max_age_seconds
+        )
 
     async def submit_crawl(self, config: CrawlConfig, *,
                            idempotency_key: str | None = None,
@@ -76,39 +108,54 @@ class CrawlService:
             config, idempotency_key=idempotency_key,
             definition_job_id=definition_job_id, trigger=trigger,
         )
-        self._wake.set()
+        self.wake()
         return job_id
 
     async def start(self) -> None:
         if self._maintenance_task is not None:
+            self._started = True
+            self._start_error = None
             return
-        remote_workers = os.environ.get("CRAWLTROVE_REMOTE_WORKERS", "").lower() in {
-            "1", "true", "yes", "on",
-        }
-        if not remote_workers:
-            if os.environ.get("PROXY_POOLS_FILE", "").strip():
-                from app.acquisition.proxy import ProxyPool
-                self._worker.proxy_pool = ProxyPool.from_environment(
-                    await repository.require_pool(),
-                )
-                self.registry.set_proxy_pool(self._worker.proxy_pool)
-                self._worker.capabilities.add("proxy")
-                self._add_available_route_capabilities()
-            if ("browser" in getattr(self._worker, "capabilities", set())
-                    and getattr(self._worker, "scraper", None) is not None):
-                from app.acquisition.owned_session import OwnedSessionRunner
-                from app.artifacts import artifact_store
-                self._session_runner = OwnedSessionRunner(
-                    self._worker.worker_id, repository, self._worker.scraper, artifact_store(),
-                )
-                self._worker.session_handler = self._session_runner
-            self._worker_task = asyncio.create_task(self._run_worker())
-        self._maintenance_task = asyncio.create_task(self._run_maintenance())
+        try:
+            remote_workers = os.environ.get("CRAWLTROVE_REMOTE_WORKERS", "").lower() in {
+                "1", "true", "yes", "on",
+            }
+            if not remote_workers:
+                if os.environ.get("PROXY_POOLS_FILE", "").strip():
+                    from app.acquisition.proxy import ProxyPool
+                    self._worker.proxy_pool = ProxyPool.from_environment(
+                        await repository.require_pool(),
+                    )
+                    self.registry.set_proxy_pool(self._worker.proxy_pool)
+                    self._worker.capabilities.add("proxy")
+                    self._add_available_route_capabilities()
+                if ("browser" in getattr(self._worker, "capabilities", set())
+                        and getattr(self._worker, "scraper", None) is not None):
+                    from app.acquisition.owned_session import OwnedSessionRunner
+                    from app.artifacts import artifact_store
+                    self._session_runner = OwnedSessionRunner(
+                        self._worker.worker_id, repository, self._worker.scraper, artifact_store(),
+                    )
+                    self._worker.session_handler = self._session_runner
+                self._worker_task = asyncio.create_task(self._run_worker())
+            self._maintenance_task = asyncio.create_task(self._run_maintenance())
+            self._started = True
+            self._start_error = None
+        except Exception as exc:
+            message = str(exc).strip()
+            detail = type(exc).__name__
+            if message:
+                detail = f"{detail}: {message[:300]}"
+            self._started = False
+            self._start_error = detail
+            logger.exception("durable crawl service failed to start detail=%s", detail)
+            raise
 
     async def stop(self) -> None:
-        self._wake.set()
+        self.wake()
         tasks = [task for task in (self._worker_task, self._maintenance_task) if task]
         self._worker_task = self._maintenance_task = None
+        self._started = False
         for task in tasks:
             task.cancel()
         if tasks:

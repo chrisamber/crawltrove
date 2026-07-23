@@ -3,7 +3,12 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
-from app.crawl.classify import FailureDecision, backoff_seconds, classify_failure
+from app.crawl.classify import (
+    FailureDecision,
+    backoff_seconds,
+    classify_failure,
+    is_transient_exception,
+)
 from app.crawl.config import CrawlConfig
 from app.crawl.discovery import discover_links
 from app.crawl.types import TaskResult
@@ -170,21 +175,27 @@ class CrawlWorker:
                 await self.repository.complete_task(task.id, task.lease_token, result)
             return True
         except Exception as exc:
+            # Infrastructure I/O (e.g. DB blip on complete_task) is retryable;
+            # programming defects stay permanent worker_exception.
+            if is_transient_exception(exc):
+                reason = "transport_error"
+            else:
+                reason = "worker_exception"
             logger.exception(
-                "crawl task raised unexpected exception worker_id=%s task_id=%s job_id=%s url=%s",
+                "crawl task raised unexpected exception worker_id=%s task_id=%s "
+                "job_id=%s url=%s reason=%s",
                 self.worker_id,
                 getattr(task, "id", None),
                 getattr(task, "job_id", None),
                 getattr(task, "url", None),
+                reason,
             )
             if not lease_lost.is_set():
-                # Persist under metadata so _record_failure and classify_failure
-                # see the real exception instead of defaulting to transport_error.
                 await self._record_failure(
                     task,
                     {
                         "metadata": {
-                            "reason": "worker_exception",
+                            "reason": reason,
                             "exception_type": type(exc).__name__,
                             "error": str(exc)[:_SAFE_ERROR_CHARS],
                         }

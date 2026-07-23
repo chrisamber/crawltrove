@@ -17,6 +17,8 @@ def test_retry_only_transient_failures():
 
 
 def test_failure_classification_uses_stable_error_codes():
+    from app.crawl.classify import is_transient_exception
+
     assert classify_failure("timeout", None).error_class == "transport"
     assert classify_failure("timeout", None).error_code == "timeout"
     assert classify_failure(None, 429).error_code == "http_429"
@@ -25,6 +27,8 @@ def test_failure_classification_uses_stable_error_codes():
     assert worker.retry is False
     assert worker.error_class == "internal"
     assert worker.error_code == "worker_exception"
+    assert is_transient_exception(OSError("database temporarily unavailable"))
+    assert not is_transient_exception(AttributeError("missing"))
 
 
 def test_backoff_uses_full_jitter_with_retry_after_bounds(monkeypatch):

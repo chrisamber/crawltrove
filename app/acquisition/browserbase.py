@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -21,6 +22,8 @@ from app.acquisition.providers import (
 from app.acquisition.sessions import SessionHandle, SessionSnapshot
 from app.scraper import MAX_DOM_BYTES, _guard_browser_websocket
 from app.url_safety import UnsafeUrlError, ensure_public_url
+
+logger = logging.getLogger(__name__)
 
 
 class BrowserbaseAPI:
@@ -198,7 +201,16 @@ class BrowserbaseAdapter:
             raise
         except UnsafeUrlError:
             raise
-        except Exception as exc:
+        except (
+            asyncio.TimeoutError,
+            TimeoutError,
+            OSError,
+            httpx.TimeoutException,
+            httpx.TransportError,
+            RuntimeError,
+        ) as exc:
+            # Capture/network timeouts and Playwright runtime capture failures
+            # are retryable browser faults. Programming defects must propagate.
             raise ProviderFailure(
                 "provider_browser_failure", True, reserved,
             ) from exc
@@ -207,7 +219,10 @@ class BrowserbaseAdapter:
                 try:
                     await self._api.delete(session_id)
                 except Exception:
-                    pass
+                    logger.exception(
+                        "failed to terminate Browserbase session session_id=%s",
+                        session_id,
+                    )
 
     async def cancel(self, remote_id: str) -> None:
         await self._api.delete(remote_id)

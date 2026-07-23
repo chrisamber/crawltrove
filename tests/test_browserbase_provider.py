@@ -107,6 +107,23 @@ async def test_browserbase_always_terminates_session(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_browserbase_does_not_reclassify_programming_errors(monkeypatch):
+    async def public(_url):
+        return ("93.184.216.34",)
+
+    monkeypatch.setattr("app.acquisition.browserbase.ensure_public_url", public)
+    api = FakeAPI()
+    adapter = BrowserbaseAdapter(
+        "key", "project", api=api,
+        playwright=FakePlaywright(AttributeError("missing capture method")),
+    )
+
+    with pytest.raises(AttributeError, match="missing capture method"):
+        await adapter.acquire(_request())
+    assert api.deleted_sessions == ["session-1"]
+
+
+@pytest.mark.asyncio
 async def test_browserbase_uses_direct_egress_and_bounded_native_usage(monkeypatch):
     checked = []
 
