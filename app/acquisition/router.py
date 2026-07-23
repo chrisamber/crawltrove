@@ -50,7 +50,14 @@ class AcquisitionRouter:
         self._repository = repository
         self._scraper = scraper
 
-    async def acquire(self, task: ClaimedTask, *, capability: str | None = None) -> TaskResult:
+    async def acquire(
+        self,
+        task: ClaimedTask,
+        *,
+        capability: str | None = None,
+        options: Mapping[str, Any] | None = None,
+    ) -> TaskResult:
+        options = options or {}
         acquisition = task.config.get("acquisition")
         acquisition = acquisition if isinstance(acquisition, Mapping) else {}
         provider = acquisition.get("provider", "auto")
@@ -63,13 +70,22 @@ class AcquisitionRouter:
         routes = self._routes(provider, capability)
         if not routes:
             raise ProviderUnavailable("provider_unavailable")
+        only_main = options.get("only_main_content")
+        if only_main is None:
+            only_main = bool(task.config.get("onlyMainContent", True))
+        max_bytes = options.get("max_decoded_bytes")
+        if max_bytes is None:
+            max_bytes = task.byte_allowance
         request = ProviderRequest(
             url=task.url,
             route="", timeout_seconds=int(task.config.get("timeoutSeconds", 60)),
-            only_main_content=bool(task.config.get("onlyMainContent", True)),
+            only_main_content=bool(only_main),
             session_profile=acquisition.get("sessionProfile")
             if isinstance(acquisition.get("sessionProfile"), str) else None,
-            max_decoded_bytes=task.byte_allowance,
+            max_decoded_bytes=int(max_bytes) if max_bytes is not None else None,
+            capture_screenshot=bool(options.get("capture_screenshot", False)),
+            before_browser=options.get("before_browser"),
+            proxy=options.get("proxy") if isinstance(options.get("proxy"), Mapping) else None,
         )
         last_failure: ProviderFailure | None = None
         for route in routes:
@@ -79,6 +95,9 @@ class AcquisitionRouter:
             route_request = ProviderRequest(
                 request.url, route, request.timeout_seconds, request.only_main_content,
                 request.session_profile, request.max_decoded_bytes,
+                capture_screenshot=request.capture_screenshot,
+                before_browser=request.before_browser,
+                proxy=request.proxy,
             )
             if (route == "local_browser"
                     and not await self._repository.reserve_browser_navigation(
@@ -164,7 +183,9 @@ class AcquisitionRouter:
                             )
             if transition_to_static_block:
                 try:
-                    return await self.acquire(task, capability="static_block")
+                    return await self.acquire(
+                        task, capability="static_block", options=options,
+                    )
                 except ProviderUnavailable:
                     if (acquisition.get("allowHumanIntervention") is True
                             and provider in {"auto", "local"}):
@@ -202,14 +223,36 @@ class AcquisitionRouter:
         return "rendering" if config.get("engine") == "browser" else "ordinary"
 
     def _normalize(self, result: ProviderResult, only_main_content: bool, engine: str) -> TaskResult:
+        if result.prebuilt_markdown is not None:
+            metadata = dict(result.prebuilt_metadata or {})
+            metadata.setdefault("engine", engine)
+            if result.status_code is not None:
+                metadata.setdefault("status_code", result.status_code)
+            if result.downloaded_bytes:
+                metadata["downloaded_bytes"] = int(result.downloaded_bytes)
+            if result.screenshot:
+                metadata["screenshot_bytes"] = len(result.screenshot)
+            return TaskResult(
+                final_url=result.final_url,
+                status_code=result.status_code,
+                title=str(result.prebuilt_title or ""),
+                markdown=str(result.prebuilt_markdown or ""),
+                metadata=metadata,
+                discovery_html=result.raw_html or "",
+            )
         built = self._scraper.build_result(
             result.raw_html, result.final_url, only_main_content,
             engine_used=engine, status_code=result.status_code,
         )
         metadata = built.get("metadata")
+        metadata = dict(metadata) if isinstance(metadata, Mapping) else {}
+        if result.downloaded_bytes:
+            metadata["downloaded_bytes"] = int(result.downloaded_bytes)
+        if result.screenshot:
+            metadata["screenshot_bytes"] = len(result.screenshot)
         return TaskResult(
             final_url=result.final_url, status_code=result.status_code,
             title=str(built.get("title", "")), markdown=str(built.get("markdown", "")),
-            metadata=metadata if isinstance(metadata, Mapping) else {},
+            metadata=metadata,
             discovery_html=result.raw_html,
         )

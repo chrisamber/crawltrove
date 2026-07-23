@@ -352,16 +352,20 @@ async def test_proxy_worker_passes_explicit_proxy_and_never_uses_environment():
         async def complete_task(self, task_id, lease_token, result):
             return True
 
-    class Scraper:
-        async def scrape(self, _url, **kwargs):
-            assert kwargs["proxy"] == {"server": "https://edge-a:9443"}
-            assert kwargs["trust_env"] is False
-            return {"success": True, "url": task.url, "markdown": "ok",
-                    "metadata": {"proxy_connected_ip": "93.184.216.34"}}
+    class Router:
+        async def acquire(self, claimed, *, capability=None, options=None):
+            assert options["proxy"] == {"server": "https://edge-a:9443"}
+            assert options.get("trust_env") is False
+            from app.crawl.types import TaskResult
+            return TaskResult(
+                final_url=claimed.url, status_code=200, title="", markdown="ok",
+                metadata={"proxy_connected_ip": "93.184.216.34"},
+            )
 
     pool = Pool()
     assert await CrawlWorker(
-        "worker-a", {"http", "proxy"}, Repository(), Scraper(), proxy_pool=pool,
+        "worker-a", {"http", "proxy"}, Repository(), object(),
+        proxy_pool=pool, acquisition_router=Router(),
     ).run_once()
     assert pool.released == [(task.id, task.lease_token)]
 
@@ -388,13 +392,18 @@ async def test_proxy_capable_worker_keeps_ordinary_task_direct():
         async def reserve_browser_navigation(self, *_): return True
         async def complete_task(self, *_): return True
 
-    class Scraper:
-        async def scrape(self, _url, **kwargs):
-            assert "proxy" not in kwargs and "trust_env" not in kwargs
-            return {"success": True, "url": task.url, "markdown": "ok", "metadata": {}}
+    class Router:
+        async def acquire(self, claimed, *, capability=None, options=None):
+            assert "proxy" not in (options or {})
+            from app.crawl.types import TaskResult
+            return TaskResult(
+                final_url=claimed.url, status_code=200, title="", markdown="ok",
+                metadata={},
+            )
 
     assert await CrawlWorker(
-        "worker-a", {"http", "proxy"}, Repository(), Scraper(), proxy_pool=Pool(),
+        "worker-a", {"http", "proxy"}, Repository(), object(),
+        proxy_pool=Pool(), acquisition_router=Router(),
     ).run_once()
 
 

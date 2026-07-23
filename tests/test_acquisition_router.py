@@ -177,6 +177,31 @@ async def test_local_challenge_transitions_once_to_static_block_routes(monkeypat
     ]
 
 
+async def test_normalize_preserves_downloaded_bytes_and_screenshot(monkeypatch):
+    from app.acquisition.providers import NativeCost, ProviderResult
+    from app.acquisition.registry import ProviderRegistry
+    from app.acquisition.router import AcquisitionRouter
+
+    async def public(_url):
+        return None
+
+    monkeypatch.setattr("app.acquisition.router.ensure_public_url", public)
+    local = _Adapter(
+        "local", {"local_http"},
+        [ProviderResult(
+            "<p>ok</p>", "https://example.com", 200, NativeCost({}),
+            downloaded_bytes=4096, screenshot=b"PNG",
+        )],
+        NativeCost({}),
+    )
+    result = await AcquisitionRouter(
+        ProviderRegistry({"local": local}), _Repository(), _Scraper(),
+    ).acquire(_router_task())
+
+    assert result.metadata["downloaded_bytes"] == 4096
+    assert result.metadata["screenshot_bytes"] == 3
+
+
 async def test_router_finishes_before_cancelling_ephemeral_remote_result(monkeypatch):
     from app.acquisition.providers import NativeCost, ProviderResult
     from app.acquisition.registry import ProviderRegistry
