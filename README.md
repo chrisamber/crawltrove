@@ -312,7 +312,7 @@ artifacts. The live service does not depend on the corpus pipeline.
 See the [frontier web-scraping evaluation](docs/frontier-scraping-evaluation.md)
 for live acquisition benchmarks, comparisons with managed and open-source
 scraping tools, known browser and anti-bot limitations, and the recommended
-roadmap. The reproducible v0.4 Firecrawl/Crawl4AI harness and its paid-call
+roadmap. The reproducible v0.4 Firecrawl/Crawl4AI benchmark test suite and its paid-call
 preflight are documented in the [v0.4 release notes](docs/release-v0.4.0.md#evaluation).
 
 ## License

@@ -1,11 +1,11 @@
-# Extraction eval harness
+# Extraction evaluation suite
 
-A tiny ground-truth eval for schema-constrained extraction. It answers the only
+A tiny ground-truth evaluation suite for schema-constrained extraction. It answers the only
 question that matters before reaching for fine-tuning: **is the model's *value*
 accuracy actually a problem, and does a change move the number?**
 
 Grammar-constrained decoding already guarantees *structure* (types, enums,
-required, nulls, `additionalProperties`, `oneOf`). So this harness ignores
+required, nulls, `additionalProperties`, `oneOf`). So this evaluation suite ignores
 structure and scores what the grammar can't: whether the values are right.
 
 ## Run it
@@ -74,7 +74,7 @@ The command validates every `relevantId` against the index before scoring. A
 missing labeled page, unavailable retrieval mode, or malformed case exits `2`
 and prints no aggregate quality score. `--gate` exits `1` if hybrid regresses
 semantic on any aggregate metric or on the exact-symbol subset. Without
-`--gate`, the harness is report-only; no baseline score is implied or written.
+`--gate`, the evaluation suite is report-only; no baseline score is implied or written.
 
 Cases use stable `kind:url:<canonical-url>` identities where possible. Add one
 JSON file per case under `eval/retrieval/cases/` with `name`, `query`, non-empty

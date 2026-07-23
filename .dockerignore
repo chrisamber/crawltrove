@@ -13,7 +13,6 @@ __pycache__
 data
 scrapes
 tmp
-.claude
 .design-sync
 # Third-party scraper scratch cache; local-only and never copied into the image.
 .firecrawl

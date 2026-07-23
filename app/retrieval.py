@@ -124,7 +124,7 @@ def _merge_keyword_sources(
     out = []
     seen = set()
     # ponytail: two-source round robin; replace with evaluated keyword-source
-    # fusion only if the retrieval harness proves ranking quality needs it.
+    # fusion only if the retrieval evaluation suite proves ranking quality needs it.
     sources = (db_hits, file_hits)
     positions = [0, 0]
     while len(out) < depth:

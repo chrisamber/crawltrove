@@ -289,7 +289,7 @@ runs a three-call paid preflight before the five-run report and stores a redacte
 JSON artifact under ignored `tmp/`; see `eval/README.md` for the exact command.
 The release environment had no `FIRECRAWL_API_KEY`, so no paid v0.4 result is
 claimed here. The earlier CLI smoke table remains historical evidence rather
-than being relabeled as a result from the new direct-API harness.
+than being relabeled as a result from the new direct-API benchmark suite.
 
 ## Sources
 

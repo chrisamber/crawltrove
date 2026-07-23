@@ -1,4 +1,4 @@
-"""Extraction eval harness — scores a model's schema-constrained output against
+"""Extraction evaluation suite — scores a model's schema-constrained output against
 hand-labeled ground truth.
 
 Each case in eval/cases/*.json carries: a `markdown` page, the `schema`, an
@@ -13,7 +13,7 @@ LOCAL_LLM_BASE_URL, or Anthropic) and report, per case and in aggregate:
                      for — should be 0 once additionalProperties:false is set
 
 Structural validity (types/enums/required) is NOT scored: grammar-constrained
-decoding already guarantees it, so the harness measures the thing the grammar
+decoding already guarantees it, so the evaluation suite measures the thing the grammar
 can't — whether the *values* are right.
 
 Usage (from the repo root):
