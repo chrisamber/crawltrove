@@ -15,6 +15,8 @@ def test_metric_labels_are_bounded_and_unknown_values_are_normalized():
     )
     assert normalize_label("route", "unbounded-route-name") == "unknown"
     assert normalize_label("provider", "firecrawl") == "firecrawl"
+    assert normalize_label("signal", "keyword_db") == "keyword_db"
+    assert "retrieval_degradations" in METRIC_LABELS
 
 
 @pytest.mark.asyncio

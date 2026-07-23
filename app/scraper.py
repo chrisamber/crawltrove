@@ -195,7 +195,12 @@ class BrowserRuntime:
             try:
                 await stealth_async(page)
             except Exception:
-                pass
+                # Stealth is best-effort; never fail the scrape, but never hide
+                # init failures that leave fingerprints half-applied.
+                logger.warning(
+                    "playwright-stealth init failed; continuing without stealth",
+                    exc_info=True,
+                )
             return context, page, transport
         except Exception:
             if context is not None and hasattr(context, "close"):

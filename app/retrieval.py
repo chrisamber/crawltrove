@@ -1,9 +1,12 @@
 """Best-effort semantic + keyword retrieval with deterministic RRF fusion."""
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from app import embeddings, vecindex
+from app import embeddings, metrics, vecindex
 from app.db import pool, repo
 
+
+logger = logging.getLogger(__name__)
 
 MODES = ("hybrid", "semantic", "keyword")
 FACET_FIELDS = ("kind", "namespace", "bucket", "tier", "framework")
@@ -11,6 +14,17 @@ FACET_FIELDS = ("kind", "namespace", "bucket", "tier", "framework")
 
 class RetrievalUnavailable(RuntimeError):
     pass
+
+
+def _degrade(signal: str, exc: BaseException) -> None:
+    """Log + count a soft signal failure; callers keep degrading to empty."""
+    logger.warning(
+        "retrieval signal degraded signal=%s error_type=%s error=%s",
+        signal,
+        type(exc).__name__,
+        str(exc)[:300],
+    )
+    metrics.record_retrieval_degradation(signal)
 
 
 def _key(hit: Dict[str, Any]) -> Tuple[str, str, int]:
@@ -201,7 +215,8 @@ async def _keyword(query: str, kind: Optional[str], depth: int,
     if not filters and pool.enabled() and kind in (None, "scrape"):
         try:
             rows = await repo.search_pages(query, limit=depth)
-        except Exception:
+        except Exception as exc:
+            _degrade("keyword_db", exc)
             rows = []
         if rows:
             db_hits = _bridge_db_rows(rows, semantic, depth)
@@ -229,7 +244,8 @@ async def search(query: str, *, kind: Optional[str] = None, k: int = 10,
     if mode in ("hybrid", "semantic") and semantic_available:
         try:
             semantic_vector = await embeddings.embed_query(query)
-        except Exception:
+        except Exception as exc:
+            _degrade("embed", exc)
             semantic_vector = None
 
     while True:
@@ -240,7 +256,8 @@ async def search(query: str, *, kind: Optional[str] = None, k: int = 10,
                 if filters:
                     kwargs["filters"] = filters
                 semantic_hits = vecindex.search(semantic_vector, **kwargs)
-            except Exception:
+            except Exception as exc:
+                _degrade("semantic", exc)
                 semantic_hits = []
 
         keyword_hits: List[Dict[str, Any]] = []
@@ -249,7 +266,8 @@ async def search(query: str, *, kind: Optional[str] = None, k: int = 10,
             try:
                 keyword_hits, keyword_available = await _keyword(
                     query, kind, depth, filters, semantic_hits)
-            except Exception:
+            except Exception as exc:
+                _degrade("keyword", exc)
                 keyword_hits = []
                 keyword_available = vecindex.available()
 

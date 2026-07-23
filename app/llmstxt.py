@@ -4,7 +4,10 @@ llms.txt is a compact, LLM-ready site index: a site title heading plus one
 `- [Page Title](url): description` line per page. llms-full.txt is the
 long-form companion: every page's markdown, concatenated. Both are generated
 from a finished crawl's results — POST /api/llmstxt runs a bounded fresh
-crawl (riding the shared WebCrawler + its jobId polling) and then formats.
+**legacy** ``WebCrawler`` job (202 + jobId polling) and then formats.
+
+This path intentionally stays on the in-memory crawler so it works without
+Postgres. Durable site crawls use ``POST /api/crawl`` instead.
 
 generate() is pure (results in, text out) so the format is testable without
 a crawl; run() is the background-task glue.
