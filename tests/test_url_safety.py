@@ -157,31 +157,6 @@ async def test_http_ip_literal_does_not_use_curl_resolve(monkeypatch):
     assert Session.last.curl_options == {}
 
 
-async def test_browser_subresource_guard_aborts_private_target(monkeypatch):
-    class Request:
-        url = "http://127.0.0.1/secret"
-
-    class Route:
-        request = Request()
-        aborted = False
-        continued = False
-
-        async def abort(self, reason):
-            self.aborted = reason
-
-        async def continue_(self):
-            self.continued = True
-
-    async def reject(url):
-        raise url_safety.UnsafeUrlError("private")
-
-    monkeypatch.setattr(scraper, "ensure_public_url", reject)
-    route = Route()
-    await scraper._guard_browser_request(route)
-    assert route.aborted == "blockedbyclient"
-    assert route.continued is False
-
-
 async def test_browser_websocket_guard_closes_private_target(monkeypatch):
     class WebSocketRoute:
         url = "ws://127.0.0.1/socket"

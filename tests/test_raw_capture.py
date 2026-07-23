@@ -28,6 +28,7 @@ def test_build_result_exposes_raw_html_for_capture():
     # Raw, pre-clean HTML is available on a private channel for persistence,
     # distinct from the cleaned `html` field already returned.
     assert r["_raw"]["html"] == html
+    assert r["discovery_html"] == html
     assert r["metadata"]["status_code"] is None   # default when not threaded
 
 

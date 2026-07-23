@@ -475,7 +475,7 @@ def main() -> int:
     print(f"\nfetched {len(docs)} render-JSON documents ({len(failed)} skipped)")
 
     if args.preview:
-        for i, (p, doc) in enumerate(list(docs.items())[: args.preview]):
+        for _i, (p, doc) in enumerate(list(docs.items())[: args.preview]):
             title, _, md = doc_to_markdown(doc)
             print("\n" + "=" * 78)
             print(f"# {title}   ({p})")

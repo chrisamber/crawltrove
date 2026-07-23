@@ -261,7 +261,7 @@ def upsert(kind: str, ref: str, url: Optional[str], texts: List[str],
                         "VALUES('delete',?,?)", (rid, old_text))
             conn.execute("DELETE FROM chunks WHERE kind=? AND ref=?", (kind, ref))
             n = 0
-            for i, (t, v) in enumerate(zip(texts, vectors)):
+            for i, (t, v) in enumerate(zip(texts, vectors, strict=False)):
                 if len(v) != dim:
                     continue
                 ch = hashlib.sha256(t.encode("utf-8")).hexdigest()

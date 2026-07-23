@@ -1,0 +1,26 @@
+[
+  {
+    "name": "simple-html",
+    "url": "https://example.com",
+    "expectedText": "Example Domain",
+    "kind": "html"
+  },
+  {
+    "name": "javascript-quotes",
+    "url": "https://quotes.toscrape.com/js/",
+    "expectedText": "The world as we have created it",
+    "kind": "javascript"
+  },
+  {
+    "name": "firecrawl-llms-txt",
+    "url": "https://docs.firecrawl.dev/llms.txt",
+    "expectedText": "Firecrawl",
+    "kind": "text"
+  },
+  {
+    "name": "w3c-dummy-pdf",
+    "url": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf",
+    "expectedText": "Dummy PDF file",
+    "kind": "pdf"
+  }
+]

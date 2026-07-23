@@ -15,10 +15,18 @@ import base64
 import secrets
 from pathlib import Path
 
-from app import corpus_browser, dedup, embeddings, extract_llm, llmstxt, log, normalize, research, retrieval, search, sitemap, storage, scheduler, runner, vecindex
+from app import corpus_browser, dedup, embeddings, extract_llm, fetch, llmstxt, log, normalize, research, retrieval, search, sitemap, storage, scheduler, runner, vecindex
 from app.services import scraper, crawler, researcher, batcher
 from app.db import migrate, pool, repo
-from app.routes import routes_jobs, routes_runs, routes_export
+from app.crawl.service import crawl_service
+from app.routes import (
+    routes_acquisition_sessions,
+    routes_crawl,
+    routes_export,
+    routes_jobs,
+    routes_operations,
+    routes_runs,
+)
 from app.url_safety import UnsafeUrlError
 
 logger = logging.getLogger("main")
@@ -76,7 +84,7 @@ async def unsafe_url_handler(_request: Request, exc: UnsafeUrlError):
 APP_USERNAME = os.environ.get("APP_USERNAME", "admin")
 APP_PASSWORD = os.environ.get("APP_PASSWORD")
 API_KEYS = {k.strip() for k in os.environ.get("API_KEYS", "").split(",") if k.strip()}
-_AUTH_OPEN_PATHS = {"/api/health"}
+_AUTH_OPEN_PATHS = {"/api/health", "/health/live", "/health/ready"}
 
 
 def _auth_configured() -> bool:
@@ -105,8 +113,17 @@ def _authorized(request: Request) -> bool:
 
 @app.middleware("http")
 async def require_auth(request: Request, call_next):
+    session_bearer_path = (
+        request.url.path.startswith("/api/acquisition/sessions/")
+        and (request.url.path.endswith("/open") or "/screenshots/" in request.url.path)
+    )
+    metrics_open = (
+        request.url.path == "/metrics"
+        and routes_operations.metrics_auth_bypass_allowed()
+    )
     if (_auth_configured() and request.method != "OPTIONS"
-            and request.url.path not in _AUTH_OPEN_PATHS):
+            and request.url.path not in _AUTH_OPEN_PATHS
+            and not metrics_open and not session_bearer_path):
         if not _authorized(request):
             headers = {}
             if APP_PASSWORD:  # only meaningful for the Basic scheme
@@ -164,21 +181,24 @@ os.makedirs("app/static", exist_ok=True)
 app.include_router(routes_jobs.router)
 app.include_router(routes_runs.router)
 app.include_router(routes_export.router)
-
-
-MAX_CRAWL_AUTO_RESUME = 3   # each crawl runs 3 workers; cap the restart stampede
+app.include_router(routes_crawl.router)
+app.include_router(routes_acquisition_sessions.router)
+app.include_router(routes_acquisition_sessions.tunnel_router)
+app.include_router(routes_operations.health_router)
+app.include_router(routes_operations.metrics_router)
+app.include_router(routes_operations.router)
 
 
 @app.on_event("startup")
 async def _on_startup():
-    """Restore interrupted research runs and crawls, then (DB only) apply
+    """Restore interrupted research runs and crawl checkpoints, then apply
     migrations and start the scheduler.
 
     Both restores are file-based and NOT gated on DATABASE_URL — checkpoints
     are the source of truth. Research auto-resume (RESEARCH_RESUME_ON_START,
     default on) needs a configured LLM backend; crawl auto-resume
-    (CRAWL_RESUME_ON_START, default on) needs nothing. Without auto-resume the
-    jobs stay "interrupted" and can be resumed via their /resume endpoints.
+    legacy crawl checkpoints remain interrupted for the explicit compatibility
+    resume endpoint; durable jobs recover through PostgreSQL leases.
     DB-side startup is entirely skipped (legacy behaviour) when DATABASE_URL is
     unset; migration failures are logged but never prevent serving scrapes.
     """
@@ -202,15 +222,11 @@ async def _on_startup():
         logger.error("research checkpoint restore failed on startup: %s", e)
     try:
         restored = crawler.restore_from_checkpoints()
-        resume_on_start = os.environ.get(
-            "CRAWL_RESUME_ON_START", "true").lower() in ("1", "true", "yes")
-        if restored and resume_on_start:
-            for job_id in restored[:MAX_CRAWL_AUTO_RESUME]:
-                crawler.resume_crawl(job_id)
-                logger.info("auto-resumed crawl %s", job_id)
-        elif restored:
-            logger.info("restored %d interrupted crawl(s); not auto-resuming",
-                        len(restored))
+        if restored:
+            logger.info(
+                "restored %d interrupted legacy crawl(s); explicit resume required",
+                len(restored),
+            )
     except Exception as e:
         logger.error("crawl checkpoint restore failed on startup: %s", e)
     if not pool.enabled():
@@ -219,8 +235,10 @@ async def _on_startup():
         await migrate.run_migrations()
     except Exception as e:
         logger.error("migrations failed on startup: %s", e)
+        return
     try:
-        await pool.get_pool()  # warm the pool before serving
+        if await pool.get_pool() is not None:
+            await crawl_service.start()
     except Exception:
         pass
     app.state.scheduler_task = asyncio.create_task(scheduler.scheduler_loop())
@@ -228,6 +246,7 @@ async def _on_startup():
 
 @app.on_event("shutdown")
 async def _on_shutdown():
+    await crawl_service.stop()
     task = getattr(app.state, "scheduler_task", None)
     if task is not None:
         task.cancel()
@@ -237,6 +256,9 @@ async def _on_shutdown():
             pass
         except Exception:
             pass
+    for runtime_owner in (scraper, crawler.scraper, researcher.scraper, batcher.scraper):
+        await runtime_owner.close()
+    await fetch.close_http_fetcher()
     await pool.reset_pool()
 
 # Pydantic schemas (compatible with Pydantic v2)
@@ -261,27 +283,6 @@ class ScrapeRequest(BaseModel):
             "example": {
                 "url": "https://news.ycombinator.com",
                 "waitForMs": 1000,
-                "onlyMainContent": True
-            }
-        }
-    }
-
-class CrawlRequest(BaseModel):
-    url: str = Field(..., description="The base URL from which to start crawling")
-    limit: int = Field(10, ge=1, le=100, description="Maximum number of pages to crawl")
-    maxDepth: int = Field(3, ge=0, le=5, description="Maximum depth of sublink traversal")
-    onlyMainContent: bool = Field(True, description="Clean elements from all crawled pages")
-    engine: str = Field("auto", pattern="^(auto|http|browser)$", description="Fetch tier per page; auto escalates HTTP→Playwright as needed")
-    useSitemap: bool = Field(True, description="Seed the crawl frontier from robots.txt/sitemap.xml before link-walking")
-    screenshots: bool = Field(False, description="Save a full-page screenshot for pages rendered on the browser tier (engine=browser guarantees one per page; auto captures only escalated pages)")
-
-    model_config = {
-        "populate_by_name": True,
-        "json_schema_extra": {
-            "example": {
-                "url": "https://quotes.toscrape.com",
-                "limit": 10,
-                "maxDepth": 2,
                 "onlyMainContent": True
             }
         }
@@ -398,7 +399,8 @@ async def health_check():
     else:
         db_state = "up" if await pool.ping() else "down"
     return {"status": "healthy", "service": "crawltrove",
-            "version": VERSION, "db": db_state}
+            "version": VERSION, "db": db_state,
+            "providers": crawl_service.registry.health()}
 
 @app.post("/api/scrape")
 async def scrape_url(request: ScrapeRequest):
@@ -482,7 +484,7 @@ async def extract_structured(request: ExtractRequest):
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Extraction failed: {e}"
-        )
+        ) from e
 
     # Persist the page (shared with /scrape) and the structured records it
     # yielded. Additive + swallowed; never changes this response.
@@ -828,59 +830,6 @@ async def get_batch_scrape_status(job_id: str):
         )
     return job
 
-
-@app.post("/api/crawl", status_code=status.HTTP_202_ACCEPTED)
-async def start_crawl(request: CrawlRequest, background_tasks: BackgroundTasks):
-    """Initiates an asynchronous website crawling job."""
-    if not request.url.startswith(("http://", "https://")):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="URL must start with http:// or https://"
-        )
-        
-    job_id = crawler.create_job(
-        base_url=request.url,
-        limit=request.limit,
-        max_depth=request.maxDepth,
-        only_main_content=request.onlyMainContent,
-        engine=request.engine,
-        use_sitemap=request.useSitemap,
-        screenshots=request.screenshots
-    )
-
-    # Run crawl job in background
-    background_tasks.add_task(crawler.run_crawl, job_id)
-    
-    return {"success": True, "jobId": job_id}
-
-@app.post("/api/crawl/{job_id}/resume")
-async def resume_crawl(job_id: str):
-    """Resume a crawl interrupted by a restart (rehydrated from its
-    checkpoint). Continues the saved frontier — no re-scraped pages."""
-    job = crawler.get_job(job_id)
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Crawl job with ID '{job_id}' not found."
-        )
-    if job["status"] != "interrupted":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Job is {job['status']}; only interrupted jobs can be resumed.")
-    crawler.resume_crawl(job_id)
-    return {"success": True, "jobId": job_id, "status": job["status"]}
-
-
-@app.get("/api/crawl/{job_id}")
-async def get_crawl_status(job_id: str):
-    """Retrieves current crawl job metrics and gathered data."""
-    job = crawler.get_job(job_id)
-    if not job:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Crawl job with ID '{job_id}' not found."
-        )
-    return job
 
 @app.post("/api/research", status_code=status.HTTP_202_ACCEPTED)
 async def start_research(request: ResearchRequest, background_tasks: BackgroundTasks):

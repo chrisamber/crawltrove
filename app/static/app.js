@@ -405,71 +405,211 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // Poll Crawl Status
-    function pollCrawlStatus(jobId) {
-        if (currentCrawlInterval) clearInterval(currentCrawlInterval);
+    const terminalCrawlStatuses = new Set([
+        'completed', 'partial', 'failed', 'cancelled', 'timed_out', 'interrupted'
+    ]);
+    const activeCrawlPageStates = new Set([
+        'pending', 'leased', 'retry_wait', 'waiting_input'
+    ]);
 
-        currentCrawlInterval = setInterval(async () => {
+    function isTerminalCrawlStatus(status) {
+        return terminalCrawlStatuses.has(status);
+    }
+
+    function normalizeCrawlPage(page) {
+        const metadata = page && page.metadata && typeof page.metadata === 'object'
+            ? page.metadata
+            : {};
+        return {
+            ...page,
+            url: page.final_url || page.original_url || page.normalized_url ||
+                page.url || metadata.url || '',
+            title: page.title || metadata.title || '',
+            markdown: typeof page.markdown === 'string' ? page.markdown : '',
+            html: typeof page.html === 'string' ? page.html : '',
+            metadata: metadata
+        };
+    }
+
+    function crawlPageKey(page) {
+        return Number.isFinite(page.discovery_seq)
+            ? `sequence:${page.discovery_seq}`
+            : `url:${page.final_url || page.original_url || page.normalized_url || page.url || ''}`;
+    }
+
+    function mergeCrawlPages(existing, incoming) {
+        const pages = new Map(existing.map(page => [crawlPageKey(page), page]));
+        incoming.forEach(update => {
+            const key = crawlPageKey(update);
+            const previous = pages.get(key);
+            const combined = {
+                ...(previous || {}),
+                ...update,
+                metadata: {
+                    ...((previous && previous.metadata) || {}),
+                    ...((update && update.metadata) || {})
+                }
+            };
+            if (previous && (update.markdown === undefined || update.markdown === null)) {
+                combined.markdown = previous.markdown;
+            }
+            if (previous && (update.html === undefined || update.html === null)) {
+                combined.html = previous.html;
+            }
+            pages.set(key, normalizeCrawlPage(combined));
+        });
+        return Array.from(pages.values()).sort((left, right) => {
+            const leftSequence = Number.isFinite(left.discovery_seq)
+                ? left.discovery_seq
+                : Number.MAX_SAFE_INTEGER;
+            const rightSequence = Number.isFinite(right.discovery_seq)
+                ? right.discovery_seq
+                : Number.MAX_SAFE_INTEGER;
+            return leftSequence - rightSequence || left.url.localeCompare(right.url);
+        });
+    }
+
+    function nextCrawlPageCursor(pages, serverCursor) {
+        const unresolved = pages
+            .filter(page => Number.isFinite(page.discovery_seq) && activeCrawlPageStates.has(page.state))
+            .map(page => page.discovery_seq);
+        if (unresolved.length) {
+            const first = Math.min(...unresolved);
+            return first <= 0 ? null : first - 1;
+        }
+        return Number.isFinite(serverCursor) ? serverCursor : null;
+    }
+
+    function nextCrawlPageDrainCursor(requestedAfter, nextAfter, batchSize,
+                                      capturedResults, expectedResults) {
+        if (batchSize === 0) return null;
+        if (expectedResults !== null && capturedResults >= expectedResults) return null;
+        if (!Number.isFinite(nextAfter)) return null;
+        if (requestedAfter !== null && nextAfter <= requestedAfter) return null;
+        return nextAfter;
+    }
+
+    function isCapturedCrawlPage(page) {
+        return page.state === 'succeeded' || page.markdown.length > 0;
+    }
+
+    function crawlProgress(job) {
+        if (isTerminalCrawlStatus(job.status)) return 1;
+        if (Number.isFinite(job.progress)) {
+            return Math.max(0, Math.min(1, job.progress > 1 ? job.progress / 100 : job.progress));
+        }
+        const discovered = Number(job.discovered_count) || 0;
+        const terminal = Number(job.terminal_count) || 0;
+        return discovered > 0 ? Math.max(0, Math.min(1, terminal / discovered)) : 0;
+    }
+
+    async function fetchCrawlPageBatch(jobId, after) {
+        const query = after === null ? '?limit=100' : `?after=${after}&limit=100`;
+        const response = await fetch(`/api/crawl/${encodeURIComponent(jobId)}/pages${query}`);
+        if (!response.ok) throw new Error('Failed to retrieve crawled pages');
+        return response.json();
+    }
+
+    // Poll crawl status and page bodies independently. Durable status responses
+    // intentionally contain counters, not an ever-growing inline results array.
+    function pollCrawlStatus(jobId) {
+        if (currentCrawlInterval) clearTimeout(currentCrawlInterval);
+        let pageCursor = null;
+        let pageRows = [];
+
+        const poll = async () => {
+            let continuePolling = true;
+            currentCrawlInterval = null;
             try {
-                const response = await fetch(`/api/crawl/${jobId}`);
+                const response = await fetch(`/api/crawl/${encodeURIComponent(jobId)}`);
                 if (!response.ok) {
                     throw new Error('Failed to retrieve crawl job state');
                 }
 
                 const job = await response.json();
-                
-                // Update stats
-                crawlPagesCount.textContent = job.results.length;
-                crawlErrorsCount.textContent = job.errors.length;
-                
-                const totalCrawled = job.results.length + job.errors.length;
-                crawledCountHeader.textContent = totalCrawled;
-                
-                const percent = Math.round(job.progress * 100);
+                const requestedAfter = pageCursor;
+                const pageBatch = await fetchCrawlPageBatch(jobId, requestedAfter);
+                const batchPages = Array.isArray(pageBatch.pages) ? pageBatch.pages : [];
+                const inlineFallback = pageRows.length === 0 && batchPages.length === 0 && Array.isArray(job.results)
+                    ? job.results
+                    : [];
+                pageRows = mergeCrawlPages(pageRows, batchPages.length ? batchPages : inlineFallback);
+
+                let results = pageRows.filter(isCapturedCrawlPage);
+                const expectedResults = Number.isFinite(job.resultCount) ? job.resultCount : null;
+                if (isTerminalCrawlStatus(job.status)) {
+                    let drainAfter = null;
+                    let drainBatch = requestedAfter === null
+                        ? pageBatch
+                        : await fetchCrawlPageBatch(jobId, null);
+                    let drainedPages = [];
+                    for (let batchIndex = 0; batchIndex < 100; batchIndex += 1) {
+                        const rows = Array.isArray(drainBatch.pages) ? drainBatch.pages : [];
+                        drainedPages = mergeCrawlPages(drainedPages, rows);
+                        const nextAfter = nextCrawlPageDrainCursor(
+                            drainAfter,
+                            drainBatch.nextAfter,
+                            rows.length,
+                            drainedPages.filter(isCapturedCrawlPage).length,
+                            expectedResults
+                        );
+                        if (nextAfter === null) break;
+                        drainAfter = nextAfter;
+                        drainBatch = await fetchCrawlPageBatch(jobId, drainAfter);
+                    }
+                    pageRows = mergeCrawlPages(pageRows, drainedPages);
+                    pageCursor = nextCrawlPageCursor(pageRows, drainBatch.nextAfter);
+                    results = pageRows.filter(isCapturedCrawlPage);
+                } else {
+                    pageCursor = nextCrawlPageCursor(pageRows, pageBatch.nextAfter);
+                }
+
+                const errors = Array.isArray(job.errors) ? job.errors : [];
+                crawlPagesCount.textContent = results.length;
+                crawlErrorsCount.textContent = errors.length;
+                crawledCountHeader.textContent = results.length + errors.length;
+
+                const percent = Math.round(crawlProgress(job) * 100);
                 crawlProgressBar.style.width = `${percent}%`;
                 crawlProgressPercent.textContent = `${percent}% Complete`;
 
-                // Update Crawl List log
-                updateCrawlLogs(job.results, job.errors);
+                updateCrawlLogs(results, errors);
+                crawlResultsData = results;
 
-                // Store crawl results in memory
-                crawlResultsData = job.results;
-
-                // Crawl-level signal aggregate (live)
-                if (job.results.length) {
-                    crawlAggregate.innerHTML = Signals.renderAggregate(Signals.summarizeCrawl(job.results));
+                if (results.length) {
+                    crawlAggregate.innerHTML = Signals.renderAggregate(Signals.summarizeCrawl(results));
                     crawlAggregate.classList.remove('hidden');
                 }
 
-                if (job.status === 'completed' || job.status === 'failed') {
-                    clearInterval(currentCrawlInterval);
+                if (isTerminalCrawlStatus(job.status)) {
+                    continuePolling = false;
                     setLoading(false);
-
-                    // Export row: file artifact links + best-effort DB exports
                     renderCrawlExport(job, jobId);
 
-                    if (job.results.length > 0) {
-                        // Display the first page of results by default, and keep logs available
-                        displayScrapedPage(job.results[0]);
-                        
-                        // Append warning/success banners to outputs
+                    if (results.length > 0) {
+                        displayScrapedPage(results[0]);
                         const meta = document.getElementById('outputMetaText') || document.createElement('span');
                         meta.id = 'outputMetaText';
-                        meta.innerHTML = `<i class="fa-solid fa-list-check text-success"></i> Crawl Job Finished. Scraped ${job.results.length} pages. Click list item below to view other pages.`;
+                        meta.innerHTML = `<i class="fa-solid fa-list-check text-success"></i> Crawl ${esc(job.status)}. Scraped ${results.length} pages. Click a list item to view another page.`;
                         outputUrl.innerHTML = '';
                         outputUrl.appendChild(meta);
-                        
                         showState('output');
                     } else {
-                        showError('Crawl job failed', 'No pages were successfully crawled.');
+                        showError(`Crawl ${job.status || 'failed'}`, 'No pages were successfully crawled.');
                     }
                 }
             } catch (error) {
-                clearInterval(currentCrawlInterval);
+                continuePolling = false;
                 showError('Crawl Error', error.message);
                 setLoading(false);
+            } finally {
+                if (continuePolling) {
+                    currentCrawlInterval = setTimeout(poll, 1200);
+                }
             }
-        }, 1200);
+        };
+
+        poll();
     }
 
     // Export links for a finished crawl. File artifact links render whenever

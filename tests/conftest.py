@@ -10,19 +10,42 @@ Override discovery with TEST_PG_ADMIN_DSN (a DSN to a maintenance db like
 """
 import asyncio
 import os
+import re
+from urllib.parse import unquote, urlsplit
 
 import pytest
 import pytest_asyncio
 
 TEST_DB = os.environ.get("TEST_DB_NAME", "crawltrove_test")
 
+
+def _safe_test_database_name(name):
+    return bool(re.fullmatch(r"(?:test(?:_[a-z0-9_]+)?|[a-z0-9_]+_test)", name or ""))
+
+
+def _database_name(dsn):
+    return unquote(urlsplit(dsn).path.lstrip("/").split("?", 1)[0])
+
+
+if not _safe_test_database_name(TEST_DB):
+    pytest.exit(
+        "TEST_DB_NAME must be clearly test-only (test, test_*, or *_test)",
+        returncode=2,
+    )
+
 # (admin DSN to the maintenance db, DSN to our test db). First admin DSN that
 # connects wins.
 _CANDIDATES = []
 if os.environ.get("TEST_PG_ADMIN_DSN"):
     admin = os.environ["TEST_PG_ADMIN_DSN"]
-    _CANDIDATES.append((admin, os.environ.get("TEST_DATABASE_URL")
-                        or f"postgresql://localhost:5432/{TEST_DB}"))
+    test_dsn = (os.environ.get("TEST_DATABASE_URL")
+                or f"postgresql://localhost:5432/{TEST_DB}")
+    if _database_name(test_dsn) != TEST_DB:
+        pytest.exit(
+            "TEST_DATABASE_URL database must exactly match TEST_DB_NAME",
+            returncode=2,
+        )
+    _CANDIDATES.append((admin, test_dsn))
 _CANDIDATES += [
     (f"postgresql://localhost:5432/postgres", f"postgresql://localhost:5432/{TEST_DB}"),
     (f"postgresql:///postgres?host=/tmp", f"postgresql:///{TEST_DB}?host=/tmp"),
@@ -81,9 +104,17 @@ async def db(monkeypatch):
     await migrate.run_migrations()
     p = await pool.get_pool()
     async with p.acquire() as conn:
+        actual_db = await conn.fetchval("SELECT current_database()")
+        if actual_db != TEST_DB or not _safe_test_database_name(actual_db):
+            pytest.fail(
+                f"refusing to truncate non-test database {actual_db!r}",
+                pytrace=False,
+            )
         await conn.execute(
-            "TRUNCATE research_runs, scrape_errors, extracted_records, scraped_pages,"
-            " scrape_runs, scrape_jobs RESTART IDENTITY CASCADE"
+            "TRUNCATE crawl_jobs, crawl_tasks, crawl_results, crawl_origins,"
+            " crawl_origin_leases, crawl_events, acquisition_attempts, research_runs,"
+            " scrape_errors, extracted_records, scraped_pages,"
+            " scrape_runs, scrape_jobs, workers RESTART IDENTITY CASCADE"
         )
     try:
         yield p

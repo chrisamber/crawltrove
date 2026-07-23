@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: core
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8000}:8000"
     init: true
@@ -19,7 +20,6 @@ services:
       - /tmp
     environment:
       - PYTHONUNBUFFERED=1
-      # Optional structured-extraction backend. Unset keeps /api/extract at 501.
       - LOCAL_LLM_BASE_URL=${LOCAL_LLM_BASE_URL:-}
       - LOCAL_LLM_MODEL=${LOCAL_LLM_MODEL:-}
       - LOCAL_LLM_API_KEY=${LOCAL_LLM_API_KEY:-}
@@ -28,8 +28,6 @@ services:
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
       - EXTRACT_MODEL=${EXTRACT_MODEL:-}
       - VISION_LLM_MODEL=${VISION_LLM_MODEL:-}
-      # Semantic search: an OpenAI-compatible /v1/embeddings server.
-      # Unset -> /api/search/semantic returns 501 and index write-hooks no-op.
       - EMBEDDINGS_BASE_URL=${EMBEDDINGS_BASE_URL:-}
       - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-}
       - EMBEDDINGS_API_KEY=${EMBEDDINGS_API_KEY:-}
@@ -39,9 +37,6 @@ services:
       - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LOG_FORMAT=${LOG_FORMAT:-}
-      # The container listens on its Compose network, while this value tells the
-      # startup guard which host address Docker publishes. Changing BIND_ADDRESS
-      # away from loopback therefore requires auth or an explicit unsafe opt-in.
       - PUBLISHED_BIND_ADDRESS=${BIND_ADDRESS:-127.0.0.1}
       - APP_USERNAME=${APP_USERNAME:-admin}
       - APP_PASSWORD=${APP_PASSWORD:-}
@@ -51,10 +46,18 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       - CHROMIUM_DISABLE_SANDBOX=${CHROMIUM_DISABLE_SANDBOX:-false}
       - DATA_DIR=/workspace/data
-      # Persistence defaults to the bundled Postgres service below.
-      # Override DATABASE_URL in the host env to point elsewhere, or set it to an
-      # empty string to run the legacy file-only mode (no database).
-      - DATABASE_URL=${DATABASE_URL-postgresql://crawltrove:crawltrove@db:5432/crawltrove}
+      # The supported Compose stack always uses its bundled database so core
+      # and auto-enrolled workers cannot split across different PostgreSQL hosts.
+      - DATABASE_URL=postgresql://crawltrove:crawltrove@db:5432/crawltrove
+      - CRAWLTROVE_ROLE=core
+      - CRAWLTROVE_REMOTE_WORKERS=true
+      - ARTIFACT_STORE_BACKEND=s3
+      - S3_BUCKET=${S3_BUCKET:-crawltrove-artifacts}
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_REGION=us-east-1
+      - S3_ACCESS_KEY_ID=${MINIO_ROOT_USER:-crawltrove-minio}
+      - S3_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD:-crawltrove-minio-local-only}
+      - CRAWLTROVE_WORKER_ID=core
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -62,6 +65,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
       interval: 10s
@@ -75,8 +80,6 @@ services:
       - POSTGRES_USER=crawltrove
       - POSTGRES_PASSWORD=crawltrove
       - POSTGRES_DB=crawltrove
-    # No published port — only CrawlTrove reaches it over the Compose
-    # network, so the default credentials never leave the host.
     volumes:
       - crawltrove_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -86,6 +89,241 @@ services:
       retries: 10
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-crawltrove-minio}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-crawltrove-minio-local-only}
+      # Local-only static KMS key so the artifact store's required AES256
+      # server-side encryption also works in the supported Compose stack.
+      - MINIO_KMS_SECRET_KEY=crawltrove-local:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+    volumes:
+      - crawltrove_minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    entrypoint: ["/bin/sh", "/scripts/minio_init.sh"]
+    user: "1000:1000"
+    environment:
+      - MC_CONFIG_DIR=/tmp/.mc
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-crawltrove-minio}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-crawltrove-minio-local-only}
+      - S3_BUCKET=${S3_BUCKET:-crawltrove-artifacts}
+      - STANDARD_WORKER_ID=standard
+      - STANDARD_S3_ACCESS_KEY=${STANDARD_S3_ACCESS_KEY:-crawltrove-standard}
+      - STANDARD_S3_SECRET_KEY=${STANDARD_S3_SECRET_KEY:-crawltrove-standard-local-only}
+      - BROWSER_WORKER_ID=browser
+      - BROWSER_S3_ACCESS_KEY=${BROWSER_S3_ACCESS_KEY:-crawltrove-browser}
+      - BROWSER_S3_SECRET_KEY=${BROWSER_S3_SECRET_KEY:-crawltrove-browser-local-only}
+      - CAPTCHA_WORKER_ID=captcha
+      - CAPTCHA_S3_ACCESS_KEY=${CAPTCHA_S3_ACCESS_KEY:-crawltrove-captcha}
+      - CAPTCHA_S3_SECRET_KEY=${CAPTCHA_S3_SECRET_KEY:-crawltrove-captcha-local-only}
+    volumes:
+      - ./scripts/minio_init.sh:/scripts/minio_init.sh:ro
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+
+  worker-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: core
+    entrypoint: ["python", "/workspace/scripts/bootstrap_local_workers.py"]
+    user: "0:0"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - CRAWLTROVE_LOCAL_BOOTSTRAP=true
+      - DATABASE_ADMIN_URL=postgresql://crawltrove:crawltrove@db:5432/crawltrove
+      - WORKER_ENROLLMENT_DIR=/enrollments
+      - WORKER_BUNDLE_UID=1000
+      - WORKER_BUNDLE_GID=1000
+      - S3_BUCKET=${S3_BUCKET:-crawltrove-artifacts}
+      - STANDARD_DB_PASSWORD=${STANDARD_DB_PASSWORD:-crawltrove-standard-db-local}
+      - STANDARD_S3_ACCESS_KEY=${STANDARD_S3_ACCESS_KEY:-crawltrove-standard}
+      - STANDARD_S3_SECRET_KEY=${STANDARD_S3_SECRET_KEY:-crawltrove-standard-local-only}
+      - BROWSER_DB_PASSWORD=${BROWSER_DB_PASSWORD:-crawltrove-browser-db-local}
+      - BROWSER_S3_ACCESS_KEY=${BROWSER_S3_ACCESS_KEY:-crawltrove-browser}
+      - BROWSER_S3_SECRET_KEY=${BROWSER_S3_SECRET_KEY:-crawltrove-browser-local-only}
+      - CAPTCHA_DB_PASSWORD=${CAPTCHA_DB_PASSWORD:-crawltrove-captcha-db-local}
+      - CAPTCHA_S3_ACCESS_KEY=${CAPTCHA_S3_ACCESS_KEY:-crawltrove-captcha}
+      - CAPTCHA_S3_SECRET_KEY=${CAPTCHA_S3_SECRET_KEY:-crawltrove-captcha-local-only}
+    volumes:
+      - worker_enrollments:/enrollments
+    tmpfs:
+      - /tmp
+    depends_on:
+      crawltrove:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  worker-standard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker-standard
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    environment:
+      - WORKER_ALLOW_INSECURE_DB=true
+      - WORKER_HEALTH_HOST=127.0.0.1
+      - WORKER_HEALTH_PORT=8081
+      - ARTIFACT_STORE_BACKEND=s3
+      - S3_BUCKET=${S3_BUCKET:-crawltrove-artifacts}
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_REGION=us-east-1
+    volumes:
+      - type: volume
+        source: worker_enrollments
+        target: /run/crawltrove-workers
+        read_only: true
+    depends_on:
+      worker-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  worker-browser:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker-browser
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_CHROOT
+    security_opt:
+      - seccomp=./seccomp_profile.json
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    environment:
+      - WORKER_ALLOW_INSECURE_DB=true
+      - WORKER_HEALTH_HOST=127.0.0.1
+      - WORKER_HEALTH_PORT=8081
+      - CRAWLTROVE_CORE_URL=http://crawltrove:8000
+      - WORKER_ALLOW_INSECURE_CORE=true
+      - ARTIFACT_STORE_BACKEND=s3
+      - S3_BUCKET=${S3_BUCKET:-crawltrove-artifacts}
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_REGION=us-east-1
+    volumes:
+      - type: volume
+        source: worker_enrollments
+        target: /run/crawltrove-workers
+        read_only: true
+    depends_on:
+      worker-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  worker-captcha:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker-captcha
+    profiles: ["captcha"]
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_CHROOT
+    security_opt:
+      - seccomp=./seccomp_profile.json
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    environment:
+      - WORKER_ALLOW_INSECURE_DB=true
+      - WORKER_HEALTH_HOST=127.0.0.1
+      - WORKER_HEALTH_PORT=8081
+      - CRAWLTROVE_CORE_URL=http://crawltrove:8000
+      - WORKER_ALLOW_INSECURE_CORE=true
+      - ARTIFACT_STORE_BACKEND=s3
+      - S3_BUCKET=${S3_BUCKET:-crawltrove-artifacts}
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_REGION=us-east-1
+      - CAPTCHA_AUTHORIZED_DOMAINS=${CAPTCHA_AUTHORIZED_DOMAINS:-}
+    volumes:
+      - type: volume
+        source: worker_enrollments
+        target: /run/crawltrove-workers
+        read_only: true
+    depends_on:
+      worker-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  egress-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: egress-agent
+    profiles: ["egress"]
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    expose:
+      - "9443"
+    volumes:
+      - type: bind
+        source: ${EGRESS_CERTS_DIR:-./secrets/egress}
+        target: /run/crawltrove-egress
+        read_only: true
+    restart: unless-stopped
+
 volumes:
   crawltrove_data:
   crawltrove_pgdata:
+  crawltrove_minio_data:
+  worker_enrollments:

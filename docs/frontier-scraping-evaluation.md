@@ -281,6 +281,16 @@ That boundary preserves CrawlTrove's strongest differentiation while allowing
 frontier acquisition providers to complement it instead of forcing the project
 to reproduce their infrastructure.
 
+## v0.4 reproducible benchmark status (2026-07-23)
+
+Version 0.4 adds `python -m eval.acquisition`, a shared-fixture comparison of
+CrawlTrove, Firecrawl's direct `/v2/scrape` API, and pinned Crawl4AI 0.9.2. It
+runs a three-call paid preflight before the five-run report and stores a redacted
+JSON artifact under ignored `tmp/`; see `eval/README.md` for the exact command.
+The release environment had no `FIRECRAWL_API_KEY`, so no paid v0.4 result is
+claimed here. The earlier CLI smoke table remains historical evidence rather
+than being relabeled as a result from the new direct-API harness.
+
 ## Sources
 
 ### Local evidence

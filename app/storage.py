@@ -13,6 +13,7 @@ import time
 import uuid
 import datetime
 import logging
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger("storage")
@@ -29,6 +30,34 @@ RESEARCH_DIR = os.path.join(DATA_DIR, "research")
 RESEARCH_CHECKPOINTS_DIR = os.path.join(RESEARCH_DIR, "checkpoints")
 CRAWL_CHECKPOINTS_DIR = os.path.join(CRAWLS_DIR, "checkpoints")
 LLMSTXT_DIR = os.path.join(DATA_DIR, "llmstxt")
+
+# Path components that enter filesystem joins must stay within a single segment.
+_SAFE_PATH_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _safe_path_component(value: str, *, label: str = "path component") -> Optional[str]:
+    """Return *value* when it is a single safe filesystem segment, else None."""
+    if not isinstance(value, str):
+        logger.warning("rejecting unsafe %s: %r", label, value)
+        return None
+    # basename drops directory components so static path analysis treats the
+    # result as a single segment once the allowlist also matches.
+    segment = os.path.basename(value)
+    if segment != value or not _SAFE_PATH_COMPONENT.fullmatch(segment):
+        logger.warning("rejecting unsafe %s: %r", label, value)
+        return None
+    if segment in {".", ".."}:
+        logger.warning("rejecting unsafe %s: %r", label, value)
+        return None
+    return segment
+
+
+def _contained_path(directory: str | Path, name: str) -> Path:
+    """Join *name* under *directory* and require the result stay inside it."""
+    base = Path(directory).resolve()
+    candidate = (base / name).resolve()
+    candidate.relative_to(base)
+    return candidate
 
 
 def ensure_dirs() -> None:
@@ -126,9 +155,12 @@ def _save_checkpoint(folder: str, job_id: str, payload: Dict[str, Any]) -> None:
     (the crawler's worker pool, unlike research's single loop) can never
     interleave into a corrupt file — last os.replace wins, both are complete.
     """
+    safe_id = _safe_path_component(job_id, label="checkpoint job_id")
+    if safe_id is None:
+        raise ValueError("checkpoint job_id must be a single safe path segment")
     ensure_dirs()
-    path = os.path.join(folder, f"{job_id}.json")
-    tmp = f"{path}.{uuid.uuid4().hex[:8]}.tmp"
+    path = _contained_path(folder, f"{safe_id}.json")
+    tmp = _contained_path(folder, f"{safe_id}.json.{uuid.uuid4().hex[:8]}.tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False)
     os.replace(tmp, path)
@@ -145,7 +177,8 @@ def _load_checkpoints(folder: str, label: str) -> List[Dict[str, Any]]:
         if not name.endswith(".json"):
             continue
         try:
-            with open(os.path.join(folder, name), encoding="utf-8") as f:
+            path = _contained_path(folder, os.path.basename(name))
+            with open(path, encoding="utf-8") as f:
                 payload = json.load(f)
             if isinstance(payload, dict) and payload.get("job"):
                 out.append(payload)
@@ -157,10 +190,13 @@ def _load_checkpoints(folder: str, label: str) -> List[Dict[str, Any]]:
 
 def _delete_checkpoint(folder: str, job_id: str, label: str) -> None:
     """Best-effort removal once a run is terminal (its artifact is saved)."""
+    safe_id = _safe_path_component(job_id, label=f"{label} checkpoint job_id")
+    if safe_id is None:
+        return
     try:
-        path = os.path.join(folder, f"{job_id}.json")
-        if os.path.exists(path):
-            os.remove(path)
+        path = _contained_path(folder, f"{safe_id}.json")
+        if path.exists():
+            path.unlink()
     except Exception as e:
         logger.warning("failed to delete %s checkpoint %s: %s", label, job_id, e)
 
@@ -215,23 +251,29 @@ def save_run_raw(
     must never fail a scrape).
     """
     out: Dict[str, str] = {}
-    if not stem or (raw_html is None and not screenshot):
+    safe_stem = _safe_path_component(stem, label="run stem") if stem else None
+    if not safe_stem or (raw_html is None and not screenshot):
+        return out
+    if not isinstance(page_no, int) or page_no < 0 or page_no > 1_000_000:
+        logger.warning("rejecting unsafe page_no for run raw: %r", page_no)
         return out
     try:
-        run_dir = os.path.join(_runs_dir(), stem)
-        os.makedirs(run_dir, exist_ok=True)
+        runs_root = Path(_runs_dir()).resolve()
+        runs_root.mkdir(parents=True, exist_ok=True)
+        run_dir = _contained_path(runs_root, safe_stem)
+        run_dir.mkdir(parents=True, exist_ok=True)
         if raw_html is not None:
             # The .txt suffix prevents browsers and generic static servers from
             # executing attacker-controlled page source as same-origin HTML.
             name = f"page-{page_no}.html.txt"
-            with open(os.path.join(run_dir, name), "w", encoding="utf-8") as f:
-                f.write(raw_html)
-            out["raw_html_path"] = f"data/runs/{stem}/{name}"
+            target = _contained_path(run_dir, name)
+            target.write_text(raw_html, encoding="utf-8")
+            out["raw_html_path"] = f"data/runs/{safe_stem}/{name}"
         if screenshot:
             name = f"page-{page_no}.png"
-            with open(os.path.join(run_dir, name), "wb") as f:
-                f.write(screenshot)
-            out["screenshot_path"] = f"data/runs/{stem}/{name}"
+            target = _contained_path(run_dir, name)
+            target.write_bytes(screenshot)
+            out["screenshot_path"] = f"data/runs/{safe_stem}/{name}"
     except Exception as e:
         logger.warning("save_run_raw failed for %s/page-%s: %s", stem, page_no, e)
     return out

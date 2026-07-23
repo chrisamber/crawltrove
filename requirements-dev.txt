@@ -3,3 +3,10 @@
 
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+ruff==0.12.11
+mypy==1.18.2
+bandit==1.8.6
+pip-audit==2.9.0
+
+# CycloneDX stays isolated in the SBOM workflow because its XML-validation
+# extra requires lxml<6 while the runtime extractor requires lxml>=6.1.1.

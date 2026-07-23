@@ -147,7 +147,7 @@ def resolve_zip_url(doc: Dict[str, Any]) -> Optional[str]:
 
 def download_zip(url: str, retries: int = 3) -> Optional[bytes]:
     last = None
-    for attempt in range(retries):
+    for _attempt in range(retries):
         try:
             r = cffi_requests.get(url, impersonate="chrome", timeout=120)
             if r.status_code == 200 and r.content:

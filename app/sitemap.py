@@ -8,13 +8,14 @@ index nesting. Best-effort throughout: any failure just means the crawler
 falls back to plain link discovery.
 """
 import re
+from html import unescape
 from typing import List, Optional
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
 from app import fetch
-from app.normalize import normalize_url
+from app.normalize import normalize_url, origin_key
 
 LOC_RE = re.compile(r"<loc>\s*(.*?)\s*</loc>", re.IGNORECASE | re.DOTALL)
 MAX_SITEMAP_FETCHES = 8
@@ -28,46 +29,80 @@ async def _get(url: str) -> Optional[str]:
 
 
 def _locs(xml: str) -> List[str]:
-    return [loc.strip() for loc in LOC_RE.findall(xml) if loc.strip()]
+    return [unescape(loc.strip()) for loc in LOC_RE.findall(xml) if loc.strip()]
+
+
+def sitemap_urls_from_robots(body: str, base_url: str) -> List[str]:
+    """Return normalized Sitemap directives in source order."""
+    root = normalize_url(base_url)
+    parsed = urlparse(root)
+    root = f"{parsed.scheme}://{parsed.netloc}/"
+    output: List[str] = []
+    seen = set()
+    for line in (body or "").splitlines():
+        match = re.match(r"^\s*sitemap\s*:\s*(\S.*)$", line, re.IGNORECASE)
+        if not match:
+            continue
+        directive = match.group(1).strip().split()[0]
+        candidate = normalize_url(urljoin(root, directive))
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            output.append(candidate)
+    return output
 
 
 async def discover(base_url: str, cap: int = 200) -> List[str]:
     """Return up to cap same-domain page URLs discovered via sitemaps."""
-    parsed = urlparse(base_url)
+    cap = max(0, cap)
+    if cap == 0:
+        return []
+    normalized_base = normalize_url(base_url)
+    parsed = urlparse(normalized_base)
     root = f"{parsed.scheme}://{parsed.netloc}"
-    domain = parsed.netloc.lower()
+    root_origin = origin_key(normalized_base)
+    if not root_origin:
+        return []
 
     sitemap_urls: List[str] = []
     robots = await _get(f"{root}/robots.txt")
     if robots:
-        for line in robots.splitlines():
-            if line.lower().startswith("sitemap:"):
-                sitemap_urls.append(line.split(":", 1)[1].strip())
+        sitemap_urls = [
+            url for url in sitemap_urls_from_robots(robots, normalized_base)
+            if origin_key(url) == root_origin
+        ]
     if not sitemap_urls:
         sitemap_urls = [f"{root}/sitemap.xml", f"{root}/sitemap_index.xml"]
 
     pages: List[str] = []
-    seen = set()
+    seen_sitemaps = set()
+    seen_pages = set()
     fetches = 0
     queue = list(sitemap_urls)
     while queue and fetches < MAX_SITEMAP_FETCHES and len(pages) < cap:
         sm_url = queue.pop(0)
-        if sm_url in seen or sm_url.endswith(".gz"):
-            seen.add(sm_url)
+        sm_identity = normalize_url(sm_url)
+        if (
+            not sm_identity
+            or sm_identity in seen_sitemaps
+            or sm_identity.lower().endswith(".gz")
+            or origin_key(sm_identity) != root_origin
+        ):
             continue
-        seen.add(sm_url)
+        seen_sitemaps.add(sm_identity)
         fetches += 1
-        xml = await _get(sm_url)
+        xml = await _get(sm_identity)
         if not xml:
             continue
         for loc in _locs(xml):
-            if urlparse(loc).netloc.lower() not in (domain, ""):
+            candidate = normalize_url(urljoin(sm_identity, loc))
+            if not candidate or origin_key(candidate) != root_origin:
                 continue
             # A <loc> ending in .xml inside a sitemapindex is a nested sitemap
-            if loc.lower().rstrip("/").endswith(".xml"):
-                queue.append(loc)
-            elif loc not in pages:
-                pages.append(loc)
+            if urlparse(candidate).path.lower().rstrip("/").endswith(".xml"):
+                queue.append(candidate)
+            elif candidate not in seen_pages:
+                seen_pages.add(candidate)
+                pages.append(candidate)
                 if len(pages) >= cap:
                     break
     return pages

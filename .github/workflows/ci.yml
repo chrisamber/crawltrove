@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -75,8 +76,16 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
-      - name: Build supported Docker runtime
-        run: docker compose build
+      - name: Verify additive migration compatibility
+        run: >-
+          python scripts/check_migration_compat.py
+          --admin-dsn "$TEST_PG_ADMIN_DSN"
+
+      - name: Verify owned acquisition guards
+        run: python -m pytest tests/test_egress_agent.py tests/test_captcha_policy.py tests/test_browser_outcomes.py tests/test_scraper_launch.py tests/test_compose_remote.py -q
+
+      - name: Build core and remote worker images
+        run: docker compose build crawltrove worker-init worker-standard worker-browser worker-captcha egress-agent
 
       - name: Verify artifact migration command
         run: |

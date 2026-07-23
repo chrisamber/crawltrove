@@ -5,11 +5,11 @@ import { Download, FileJson, Filter, Globe2, LoaderCircle, RefreshCw, RotateCcw,
 import { toast } from "sonner";
 
 import { AppShell, PageHeader, type ViewId } from "@/components/app-shell";
+import { AcquisitionInspector } from "@/components/acquisition-inspector";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
 import {
@@ -29,18 +29,22 @@ import {
 import {
   ApiError,
   api,
+  crawlMarkdown,
   formatBytes,
   formatDate,
+  mergeCrawlPages,
   type Artifact,
   type CorpusRecord,
   type CorpusStats,
+  type CrawlDisplayPage,
   type CrawlJob,
+  type CrawlPagesResponse,
   type Health,
   type Run,
   type ScrapeResult,
 } from "@/lib/api";
 import { useLatestRequest } from "@/hooks/use-latest-request";
-import { isAbortError, isTerminalCrawlStatus, normalizePageLimit } from "@/lib/request-safety";
+import { isAbortError, isTerminalCrawlStatus, nextCrawlPageCursor, nextCrawlPageDrainCursor, normalizePageLimit } from "@/lib/request-safety";
 import { cn } from "@/lib/utils";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
@@ -138,19 +142,29 @@ function CrawlWorkspace({ active }: { active: boolean }) {
   const [busy, setBusy] = React.useState(false);
   const [job, setJob] = React.useState<CrawlJob | null>(null);
   const [jobId, setJobId] = React.useState<string | null>(null);
+  const [crawlPages, setCrawlPages] = React.useState<CrawlDisplayPage[]>([]);
   const [scrape, setScrape] = React.useState<ScrapeResult | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [inspectorDismissed, setInspectorDismissed] = React.useState(false);
   const [pollRevision, setPollRevision] = React.useState(0);
   const [startSubmitRequest] = useLatestRequest();
+  const crawlPagesRef = React.useRef<CrawlDisplayPage[]>([]);
+  const pageCursorRef = React.useRef<number | null>(null);
+
+  const resetCrawlPages = React.useCallback(() => {
+    crawlPagesRef.current = [];
+    pageCursorRef.current = null;
+    setCrawlPages([]);
+  }, []);
 
   React.useEffect(() => {
     const activeJobId = readActiveCrawl();
     if (!activeJobId) return;
+    resetCrawlPages();
     setJob({ status: "queued", progress: 0, jobId: activeJobId });
     setJobId(activeJobId);
     setBusy(true);
-  }, []);
+  }, [resetCrawlPages]);
 
   React.useEffect(() => {
     if (!jobId) return;
@@ -162,10 +176,60 @@ function CrawlWorkspace({ active }: { active: boolean }) {
       let continuePolling = true;
       controller = new AbortController();
       try {
-        const next = await api<CrawlJob>(`/api/crawl/${jobId}`, {
+        const encodedJobId = encodeURIComponent(jobId);
+        const next = await api<CrawlJob>(`/api/crawl/${encodedJobId}`, {
           signal: controller.signal,
         });
+        const requestedAfter = pageCursorRef.current;
+        const fetchPageBatch = (after: number | null) => {
+          const query = after === null ? "?limit=100" : `?after=${after}&limit=100`;
+          return api<CrawlPagesResponse>(
+            `/api/crawl/${encodedJobId}/pages${query}`,
+            { signal: controller?.signal },
+          );
+        };
+        const pageBatch = await fetchPageBatch(requestedAfter);
         if (stopped) return;
+
+        const batchPages = Array.isArray(pageBatch.pages) ? pageBatch.pages : [];
+        const fallbackInlinePages = crawlPagesRef.current.length === 0 && batchPages.length === 0
+          ? (next.results ?? [])
+          : [];
+        let mergedPages = mergeCrawlPages(
+          crawlPagesRef.current,
+          batchPages.length ? batchPages : fallbackInlinePages,
+        );
+
+        const expectedResults = typeof next.resultCount === "number" ? next.resultCount : null;
+        if (isTerminalCrawlStatus(next.status)) {
+          let drainAfter: number | null = null;
+          let drainBatch = requestedAfter === null ? pageBatch : await fetchPageBatch(null);
+          let drainedPages: CrawlDisplayPage[] = [];
+          for (let batchIndex = 0; batchIndex < 100; batchIndex += 1) {
+            if (stopped) return;
+            const rows = Array.isArray(drainBatch.pages) ? drainBatch.pages : [];
+            drainedPages = mergeCrawlPages(drainedPages, rows);
+            const nextAfter = nextCrawlPageDrainCursor({
+              requestedAfter: drainAfter,
+              nextAfter: drainBatch.nextAfter,
+              batchSize: rows.length,
+              capturedResults: drainedPages.filter(isCapturedCrawlPage).length,
+              expectedResults,
+            });
+            if (nextAfter === null) break;
+            drainAfter = nextAfter;
+            drainBatch = await fetchPageBatch(drainAfter);
+          }
+          mergedPages = mergeCrawlPages(mergedPages, drainedPages);
+          pageCursorRef.current = nextCrawlPageCursor(mergedPages, drainBatch.nextAfter);
+        } else {
+          pageCursorRef.current = nextCrawlPageCursor(
+            mergedPages,
+            pageBatch.nextAfter,
+          );
+        }
+        crawlPagesRef.current = mergedPages;
+        setCrawlPages(mergedPages);
         setJob(next);
         if (isTerminalCrawlStatus(next.status)) {
           continuePolling = false;
@@ -173,7 +237,7 @@ function CrawlWorkspace({ active }: { active: boolean }) {
           setBusy(false);
           setJobId(null);
           if (next.status === "completed") toast.success("Crawl completed");
-          else if (next.status === "interrupted") toast.warning("Crawl interrupted");
+          else if (next.status === "partial" || next.status === "interrupted") toast.warning(`Crawl ${next.status}`);
           else toast.error(`Crawl ${next.status}`);
         }
       } catch (pollError) {
@@ -219,6 +283,7 @@ function CrawlWorkspace({ active }: { active: boolean }) {
     setError(null);
     setScrape(null);
     setJob(null);
+    resetCrawlPages();
     setInspectorDismissed(false);
     setBusy(true);
     if (mode === "crawl") setLimit(pageLimit);
@@ -253,10 +318,15 @@ function CrawlWorkspace({ active }: { active: boolean }) {
     }
   };
 
-  const progress = normalizeProgress(job?.progress);
+  const capturedPages = crawlPages.filter(isCapturedCrawlPage);
+  const progress = isTerminalCrawlStatus(job?.status ?? "")
+    ? 1
+    : normalizeProgress(job?.progress ?? crawlCounterProgress(job));
   const timeline = crawlTimeline(job?.status ?? "queued", progress);
   const inspectorOpen = Boolean(job || scrape || error) && !inspectorDismissed;
-  const title = scrape?.title || scrape?.url || job?.base_url || url || "Current operation";
+  const configuredUrl = typeof job?.config?.url === "string" ? job.config.url : "";
+  const title = scrape?.title || scrape?.url || job?.base_url || configuredUrl || url || "Current operation";
+  const markdown = crawlMarkdown(capturedPages);
   const retryPolling = () => {
     setError(null);
     setBusy(true);
@@ -286,15 +356,19 @@ function CrawlWorkspace({ active }: { active: boolean }) {
             ) : job ? (
               <div className="flex min-h-0 flex-1 flex-col">
                 <KeyValueList items={[
-                  { label: "Job", value: String(job.job_id ?? job.jobId ?? jobId ?? "—") },
+                  { label: "Job", value: String(job.id ?? job.job_id ?? job.jobId ?? jobId ?? "—") },
                   { label: "Status", value: <StatusBadge status={job.status} /> },
                   { label: "Progress", value: `${Math.round(progress * 100)}%` },
-                  { label: "Pages", value: job.results?.length ?? 0 },
+                  { label: "Pages", value: Math.max(capturedPages.length, job.resultCount ?? 0) },
                   { label: "Errors", value: job.errors?.length ?? 0 },
                 ]} />
                 <div className="p-4"><ProgressTimeline steps={timeline} /></div>
-                <Separator className="bg-white/[0.08]" />
-                <CodeViewer className="flex-1" sources={{ events: crawlEvents(job), json: JSON.stringify(job, null, 2) }} />
+                <AcquisitionInspector
+                  job={job}
+                  jobId={String(job.id ?? job.job_id ?? job.jobId ?? jobId ?? "")}
+                  onRefresh={retryPolling}
+                />
+                <CodeViewer key={markdown ? "crawl-content" : "crawl-status"} className="flex-1" sources={{ markdown, events: crawlEvents(job, capturedPages), json: JSON.stringify({ ...job, pages: crawlPages }, null, 2) }} />
               </div>
             ) : null}
           </InspectorContent>
@@ -336,7 +410,7 @@ function CrawlWorkspace({ active }: { active: boolean }) {
                   </div>
                   <div className={cn("space-y-2", mode === "scrape" && "opacity-40")}>
                     <Label htmlFor="page-limit" className="text-xs text-zinc-400">Page limit</Label>
-                    <Input id="page-limit" type="number" min={1} max={500} value={limit} onChange={(event) => setLimit(Number(event.target.value))} className="h-8 border-white/10 bg-[#090a0c] font-mono text-xs" disabled={busy || mode === "scrape"} />
+                    <Input id="page-limit" type="number" min={1} max={100} value={limit} onChange={(event) => setLimit(Number(event.target.value))} className="h-8 border-white/10 bg-[#090a0c] font-mono text-xs" disabled={busy || mode === "scrape"} />
                   </div>
                 </div>
               </div>
@@ -658,25 +732,45 @@ function normalizeProgress(value: unknown) {
   return Math.max(0, Math.min(1, value > 1 ? value / 100 : value));
 }
 
+function crawlCounterProgress(job: CrawlJob | null) {
+  if (!job) return 0;
+  const discovered = typeof job.discovered_count === "number" ? job.discovered_count : 0;
+  const terminal = typeof job.terminal_count === "number" ? job.terminal_count : 0;
+  return discovered > 0 ? terminal / discovered : 0;
+}
+
+function isCapturedCrawlPage(page: CrawlDisplayPage) {
+  return page.state === "succeeded" || page.markdown.length > 0;
+}
+
 function crawlTimeline(status: string, progress: number): TimelineStep[] {
-  const terminal = status === "completed";
-  const failed = ["failed", "cancelled", "interrupted"].includes(status);
-  const activeIndex = terminal ? 5 : progress < 0.05 ? 0 : progress < 0.25 ? 1 : progress < 0.7 ? 2 : progress < 0.95 ? 3 : 4;
+  const terminal = isTerminalCrawlStatus(status);
+  const failed = terminal && status !== "completed";
+  const activeIndex = terminal ? 4 : progress < 0.05 ? 0 : progress < 0.25 ? 1 : progress < 0.7 ? 2 : progress < 0.95 ? 3 : 4;
   return [
     ["Queue accepted", "Validate scope and create the frontier."],
     ["Discover URLs", "Read sitemap and same-site links."],
     ["Fetch pages", "Use HTTP first and browser fallback."],
     ["Extract content", "Clean Markdown and compute signals."],
     ["Persist artifacts", "Store output, metadata, and provenance."],
-  ].map(([label, description], index) => ({ label, description, state: terminal || index < activeIndex ? "done" : index === activeIndex ? (failed ? "error" : "active") : "pending" } as TimelineStep));
+  ].map(([label, description], index) => ({
+    label,
+    description,
+    state: terminal
+      ? (failed && index === activeIndex ? "error" : "done")
+      : index < activeIndex
+        ? "done"
+        : index === activeIndex
+          ? "active"
+          : "pending",
+  } as TimelineStep));
 }
 
-function crawlEvents(job: CrawlJob) {
-  const pages = job.results ?? [];
+function crawlEvents(job: CrawlJob, pages: CrawlDisplayPage[]) {
   const errors = job.errors ?? [];
   return [
     `status   ${job.status}`,
-    `progress ${Math.round(normalizeProgress(job.progress) * 100)}%`,
+    `progress ${Math.round((isTerminalCrawlStatus(job.status) ? 1 : normalizeProgress(job.progress ?? crawlCounterProgress(job))) * 100)}%`,
     `pages    ${pages.length}`,
     `errors   ${errors.length}`,
     ...pages.slice(-12).map((page, index) => `page ${String(index + 1).padStart(3, "0")}  ${String(page.url ?? page.title ?? "captured")}`),
