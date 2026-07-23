@@ -1,4 +1,4 @@
-"""SON-123: GET /api/runs — list runs, filter by jobId/status, paginate.
+"""GET /api/runs — list runs, filter by jobId/status, paginate.
 
 DB-path tests (skip cleanly without a local Postgres). Seed runs through the
 repo, then exercise the list endpoint end-to-end through the real app.

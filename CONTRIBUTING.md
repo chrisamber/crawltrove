@@ -53,6 +53,21 @@ Include:
 - migration notes for changed API fields, environment variables, or storage;
 - screenshots only when the dashboard changed visibly.
 
+### Public-facing language
+
+Repository text (code comments, docstrings, docs, PR titles/bodies, commit
+messages) must stay product- and engineering-focused:
+
+- Explain behavior and tradeoffs, not internal ticket hierarchies, epic/story
+  codes, or private issue-tracker URLs.
+- Do not reference personal agent docs, editor/agent process, prompts, or
+  AI-generation attribution.
+- Keep AI/LLM/model terminology when it documents real product behavior
+  (extraction, embeddings, vision OCR, and so on).
+
+`tests/test_open_source_hygiene.py` scans tracked service sources and docs for
+common tracker/process residue and fails CI when it appears.
+
 ### Review expectations
 
 For large or security-sensitive changes (authentication, storage, remote

@@ -1,4 +1,4 @@
-// SON-123: Jobs & Runs panels — list/create/trigger jobs and watch run status.
+// Jobs & Runs panels — list/create/trigger jobs and watch run status.
 // Vanilla JS, same conventions as app.js: fetch the /api jobs+runs REST API,
 // render into the existing glass-card shell. ponytail: poll the runs list on a
 // timer instead of websockets — runs are low-frequency and the API is cheap.
