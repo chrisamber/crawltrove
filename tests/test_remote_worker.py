@@ -121,7 +121,24 @@ async def test_lost_heartbeat_discards_result(insecure_config):
     runtime = WorkerRuntime(insecure_config, repository, FakeArtifacts(), worker=worker)
     await runtime.tick()
     assert repository.complete_calls == 0
-    assert runtime.readiness()["database"] == "down"
+    readiness = runtime.readiness()
+    assert readiness["database"] == "down"
+    assert "database" in readiness.get("reasons", {})
+
+
+async def test_register_failure_exposes_reason(insecure_config):
+    class BoomRepository(FakeRepository):
+        async def register(self, protocol_version, capabilities):
+            raise OSError("connection refused")
+
+    runtime = WorkerRuntime(
+        insecure_config, BoomRepository(), FakeArtifacts(), worker=FakeWorker(FakeRepository()),
+    )
+    await runtime.tick()
+    readiness = runtime.readiness()
+    assert readiness["ready"] is False
+    assert readiness["database"] == "down"
+    assert "connection refused" in readiness["reasons"]["database"]
 
 
 async def test_remote_worker_enables_only_enrolled_managed_routes(insecure_config, monkeypatch):

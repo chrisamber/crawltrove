@@ -36,6 +36,9 @@ LABEL_VALUES = {
     "kind": frozenset({"downloaded", "artifact", "unknown"}),
     "reason": frozenset({"transport", "policy", "budget", "lease_expired", "unknown"}),
     "component": frozenset({"process", "worker", "unknown"}),
+    "signal": frozenset({
+        "embed", "semantic", "keyword_db", "keyword", "unknown",
+    }),
 }
 
 
@@ -57,6 +60,7 @@ METRIC_LABELS = {
     "provider_usage": ("provider", "meter"),
     "workers": ("state", "capability"),
     "live_sessions": ("state", "backend"),
+    "retrieval_degradations": ("signal",),
 }
 
 
@@ -98,6 +102,16 @@ live_sessions = Gauge(
     "crawltrove_live_sessions", "Live sessions", METRIC_LABELS["live_sessions"],
     multiprocess_mode="livesum",
 )
+retrieval_degradations = Counter(
+    "crawltrove_retrieval_degradations_total",
+    "Retrieval signal failures that degraded rather than failing the request",
+    METRIC_LABELS["retrieval_degradations"],
+)
+
+
+def record_retrieval_degradation(signal: object) -> None:
+    """Count a best-effort retrieval path that returned empty due to error."""
+    retrieval_degradations.labels(normalize_label("signal", signal)).inc()
 
 _counter_lock = threading.Lock()
 _attempt_totals: dict[tuple[str, ...], float] = {}

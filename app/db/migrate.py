@@ -27,6 +27,11 @@ def _migration_files() -> List[Tuple[str, str]]:
     return out
 
 
+def migration_versions() -> List[str]:
+    """Public list of migration version ids expected by this build."""
+    return [version for version, _path in _migration_files()]
+
+
 async def run_migrations() -> int:
     """Apply any unapplied migrations. Returns the count applied this call.
 

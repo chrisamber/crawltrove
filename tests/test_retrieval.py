@@ -61,11 +61,18 @@ async def test_postgres_exception_falls_back_to_file_keyword(monkeypatch):
     async def broken(*args, **kwargs):
         raise RuntimeError("db down")
 
+    recorded: list[str] = []
+    monkeypatch.setattr(
+        retrieval.metrics, "record_retrieval_degradation",
+        lambda signal: recorded.append(str(signal)),
+    )
     monkeypatch.setattr(retrieval.repo, "search_pages", broken)
     monkeypatch.setattr(retrieval.vecindex, "keyword_search",
                         lambda query, kind=None, k=10: [_hit("file")])
     hits = await retrieval.search("term", mode="keyword")
     assert [hit["ref"] for hit in hits] == ["file"]
+    # Depth expansion may re-enter keyword; every DB exception must be counted.
+    assert recorded and set(recorded) == {"keyword_db"}
 
 
 async def test_semantic_mode_unavailable(monkeypatch):

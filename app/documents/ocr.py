@@ -34,8 +34,12 @@ SCRIPT_LANGS = {
 }
 
 
-def _render(page, dpi: int) -> Image.Image:
-    """Render a pypdfium2 page to an independent PIL image."""
+def render_page(page, dpi: int) -> Image.Image:
+    """Render a pypdfium2 page to an independent PIL image.
+
+    Public so vision OCR escalation can share the same render path without
+    reaching into private helpers.
+    """
     bitmap = page.render(scale=dpi / 72)
     try:
         return bitmap.to_pil().copy()
@@ -111,7 +115,7 @@ def ocr_page(page, *, default_languages: str = "eng", dpi: int = 300,
     render error) so one bad page never fails a scrape.
     """
     try:
-        img = _render(page, dpi)
+        img = render_page(page, dpi)
     except Exception:
         return None
     return ocr_image(img, default_languages=default_languages, use_osd=use_osd)

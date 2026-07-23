@@ -9,6 +9,23 @@ class FailureDecision:
     error_code: str
 
 
+# Infrastructure / I/O faults that should re-enter the queue, not fail permanently.
+_TRANSIENT_EXCEPTION_TYPES = (
+    OSError,
+    TimeoutError,
+    ConnectionError,
+    BrokenPipeError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    ConnectionRefusedError,
+)
+
+
+def is_transient_exception(exc: BaseException) -> bool:
+    """True when the failure is likely infrastructure and worth retrying."""
+    return isinstance(exc, _TRANSIENT_EXCEPTION_TYPES)
+
+
 def classify_failure(reason: str | None, status: int | None) -> FailureDecision:
     if reason in {
         "unsafe_url", "blocked_robots", "policy_error", "invalid_input",

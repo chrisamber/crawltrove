@@ -34,7 +34,7 @@ class _HeartbeatRepository:
     async def heartbeat(self, task_id: Any, lease_token: Any) -> bool:
         ok = await self._repository.heartbeat(task_id, lease_token)
         if not ok:
-            self._runtime._database = "down"
+            self._runtime._mark("database", "down", "lease_heartbeat_rejected")
         return ok
 
 
@@ -113,6 +113,8 @@ class WorkerRuntime:
         self._protocol = "unknown"
         self._artifacts = "unknown"
         self._browser = "not_required"
+        # Per-component reason when a probe is not "up"/"active"/"not_required".
+        self._reasons: dict[str, str] = {}
         self._next_registration_at = 0.0
         self._health_server: asyncio.AbstractServer | None = None
         self.health_port: int | None = None
@@ -163,8 +165,18 @@ class WorkerRuntime:
         # health endpoint immediate lease-loss visibility. Production lease loss
         # is observed by _HeartbeatRepository above.
         if getattr(self.repository, "heartbeat_ok", True) is False:
-            self._database = "down"
+            self._mark("database", "down", "repository_heartbeat_ok_false")
         return result
+
+    def _mark(self, component: str, state: str, reason: str | None = None) -> None:
+        """Set a health component and optionally record why it is not healthy."""
+        attr = f"_{component}"
+        setattr(self, attr, state)
+        healthy = state in {"up", "active", "not_required"}
+        if healthy:
+            self._reasons.pop(component, None)
+        elif reason:
+            self._reasons[component] = reason[:200]
 
     async def _register(self) -> bool:
         now = time.monotonic()
@@ -178,13 +190,15 @@ class WorkerRuntime:
                 self.config.protocol_version,
                 set(getattr(self.worker, "capabilities", self.config.capabilities)),
             )
-        except Exception:
-            self._database = "down"
-            self._protocol = "unknown"
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {str(exc).strip()[:160]}".rstrip(": ")
+            self._mark("database", "down", detail or "register_failed")
+            self._mark("protocol", "unknown", "register_failed")
             return False
         state = registration.get("state") if isinstance(registration, dict) else registration
-        self._protocol = str(state or "incompatible")
-        self._database = "up"
+        protocol = str(state or "incompatible")
+        self._mark("protocol", protocol, None if protocol == "active" else f"state={protocol}")
+        self._mark("database", "up")
         return self._protocol == "active"
 
     async def _check_artifacts(self) -> None:
@@ -194,26 +208,34 @@ class WorkerRuntime:
                 result = check()
                 if asyncio.iscoroutine(result):
                     result = await result
-                self._artifacts = "up" if result else "down"
+                if result:
+                    self._mark("artifacts", "up")
+                else:
+                    self._mark("artifacts", "down", "healthcheck_returned_false")
             else:
-                self._artifacts = "up" if getattr(self.artifacts, "ready", True) else "down"
-        except Exception:
-            self._artifacts = "down"
+                if getattr(self.artifacts, "ready", True):
+                    self._mark("artifacts", "up")
+                else:
+                    self._mark("artifacts", "down", "artifacts_not_ready")
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {str(exc).strip()[:160]}".rstrip(": ")
+            self._mark("artifacts", "down", detail or "artifacts_healthcheck_failed")
 
     async def _check_browser(self) -> bool:
         if "browser" not in self.config.capabilities:
-            self._browser = "not_required"
+            self._mark("browser", "not_required")
             return True
         try:
             browser = getattr(self.scraper, "browser", None)
             if browser is None:
-                self._browser = "down"
+                self._mark("browser", "down", "browser_handle_missing")
                 return False
             await browser.start()
-            self._browser = "up"
+            self._mark("browser", "up")
             return True
-        except Exception:
-            self._browser = "down"
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {str(exc).strip()[:160]}".rstrip(": ")
+            self._mark("browser", "down", detail or "browser_start_failed")
             return False
 
     async def drain(self) -> None:
@@ -224,8 +246,9 @@ class WorkerRuntime:
         self._stop.set()
         try:
             await self.repository.drain()
-        except Exception:
-            self._database = "down"
+        except Exception as exc:
+            detail = f"{type(exc).__name__}: {str(exc).strip()[:160]}".rstrip(": ")
+            self._mark("database", "down", detail or "drain_failed")
 
     def readiness(self) -> dict[str, Any]:
         ready = (
@@ -235,7 +258,7 @@ class WorkerRuntime:
             and self._artifacts == "up"
             and self._browser in {"up", "not_required"}
         )
-        return {
+        payload = {
             "ready": ready,
             "database": self._database,
             "protocol": self._protocol,
@@ -244,6 +267,9 @@ class WorkerRuntime:
             "security": self.config.security_state,
             "draining": self.draining,
         }
+        if self._reasons:
+            payload["reasons"] = dict(self._reasons)
+        return payload
 
     async def start_health_server(self, host: str | None = None, port: int | None = None) -> None:
         if self._health_server is not None:

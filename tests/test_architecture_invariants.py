@@ -140,3 +140,51 @@ def test_deploy_stays_single_uvicorn_worker():
     assert not offenders, (
         "multi-worker flag found (breaks single-process invariant): "
         + ", ".join(offenders))
+
+
+# Only these service modules may import the legacy in-memory WebCrawler.
+# New crawl product work goes through app.crawl.*; expanding this list is a
+# deliberate compatibility decision, not a default.
+LEGACY_CRAWLER_IMPORT_ALLOWLIST = frozenset({
+    "app/crawler.py",
+    "app/services.py",
+})
+
+
+def _imports_legacy_crawler(source: str) -> bool:
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "app.crawler" or alias.name.startswith("app.crawler."):
+                    return True
+        elif isinstance(node, ast.ImportFrom) and node.level == 0:
+            mod = node.module or ""
+            if mod == "app.crawler" or mod.startswith("app.crawler."):
+                return True
+            if mod == "app" and any(a.name == "crawler" for a in node.names):
+                return True
+    return False
+
+
+def test_legacy_crawler_import_allowlist():
+    """Fence the dual-crawl split: durable code must not re-grow on WebCrawler."""
+    offenders = []
+    for path in SERVICE_ROOT.rglob("*.py"):
+        rel = str(path.relative_to(REPO_ROOT)).replace("\\", "/")
+        if rel in LEGACY_CRAWLER_IMPORT_ALLOWLIST:
+            continue
+        if _imports_legacy_crawler(path.read_text()):
+            offenders.append(rel)
+    assert not offenders, (
+        "legacy WebCrawler import outside allowlist "
+        f"{sorted(LEGACY_CRAWLER_IMPORT_ALLOWLIST)}:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_vision_uses_public_ocr_render():
+    """No private ocr._* coupling from vision escalation."""
+    vision = (SERVICE_ROOT / "documents" / "vision.py").read_text()
+    assert "ocr._render" not in vision
+    assert "ocr.render_page" in vision

@@ -132,7 +132,7 @@ async def retry_failures(job_id: UUID, request: RetryFailuresRequest | None = No
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Crawl job not found") from exc
     except ValueError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    crawl_service._wake.set()
+    crawl_service.wake()
     return {"success": True, "jobId": str(retry_job), "sourceJobId": str(job_id)}
 
 

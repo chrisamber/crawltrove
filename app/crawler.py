@@ -27,6 +27,19 @@ def _fresh_state(base_url: str) -> Dict[str, Any]:
 
 
 class WebCrawler:
+    """Legacy in-process crawler (compatibility only).
+
+    Production crawls go through ``app.crawl`` (Postgres queue, leases,
+    remote workers). This class remains for:
+
+    * ``POST /api/llmstxt`` (bounded in-memory crawl + format)
+    * ``GET /api/crawl/{id}`` / ``POST .../resume`` for pre-v0.4 checkpoints
+
+    Do not add new product features here. New crawl work must use
+    ``app.crawl.service.submit_crawl``. Import surface is fenced by
+    ``tests/test_architecture_invariants.py``.
+    """
+
     def __init__(self):
         # In-memory storage for crawl jobs
         self.jobs: Dict[str, Dict[str, Any]] = {}

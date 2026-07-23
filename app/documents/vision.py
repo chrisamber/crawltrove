@@ -107,7 +107,7 @@ async def _escalate_pdf(parsed: ParsedDoc, data: bytes) -> ParsedDoc:
                 i = entry["page"]
                 page = doc[i]
                 try:
-                    img = ocr._render(page, dpi)
+                    img = ocr.render_page(page, dpi)
                 finally:
                     page.close()
                 text = await extract_llm.transcribe_image(_png_b64(img), "image/png")

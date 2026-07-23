@@ -7,7 +7,6 @@ import os
 import resource
 import secrets
 import sys
-import time
 from typing import Annotated
 from uuid import UUID
 
@@ -90,7 +89,7 @@ async def _migrations_ready() -> bool:
     try:
         async with pool.acquire() as conn:
             applied = {row["version"] for row in await conn.fetch("SELECT version FROM schema_migrations")}
-        expected = {version for version, _path in migrate._migration_files()}
+        expected = set(migrate.migration_versions())
     except Exception:
         return False
     return applied == expected
@@ -121,7 +120,7 @@ async def _browser_ready() -> bool:
                 ))
         except Exception:
             return False
-    browser = getattr(getattr(crawl_service._worker, "scraper", None), "browser", None)
+    browser = crawl_service.worker_browser()
     if browser is None:
         return False
     try:
@@ -132,12 +131,7 @@ async def _browser_ready() -> bool:
 
 
 async def _leases_ready() -> bool:
-    task = crawl_service._maintenance_task
-    last_success = crawl_service._maintenance_last_success
-    return (
-        task is not None and not task.done() and last_success is not None
-        and time.monotonic() - last_success <= 30
-    )
+    return crawl_service.leases_ready(max_age_seconds=30)
 
 
 async def readiness_report(checks: dict[str, bool] | None = None) -> tuple[dict[str, str], bool]:

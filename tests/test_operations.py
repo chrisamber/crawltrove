@@ -15,6 +15,8 @@ def test_metric_labels_are_bounded_and_unknown_values_are_normalized():
     )
     assert normalize_label("route", "unbounded-route-name") == "unknown"
     assert normalize_label("provider", "firecrawl") == "firecrawl"
+    assert normalize_label("signal", "keyword_db") == "keyword_db"
+    assert "retrieval_degradations" in METRIC_LABELS
 
 
 @pytest.mark.asyncio
@@ -57,6 +59,27 @@ async def test_readiness_fails_closed_when_lease_renewal_is_unavailable():
 
     assert ready is False
     assert report["status"] == "not_ready"
+
+
+def test_leases_ready_fails_when_crawl_service_failed_to_start():
+    from app.crawl.service import CrawlService
+
+    service = CrawlService.__new__(CrawlService)
+    service._started = False
+    service._start_error = "RuntimeError: boom"
+    service._maintenance_task = None
+    service._maintenance_last_success = None
+    service._maintenance_last_error = None
+    assert service.leases_ready() is False
+
+
+def test_migration_versions_are_public():
+    from app.db import migrate
+
+    versions = migrate.migration_versions()
+    assert "0001_init" in versions
+    assert "0012_queue_claim_performance" in versions
+    assert versions == [version for version, _path in migrate._migration_files()]
 
 
 def test_purge_requires_matching_uuid_confirmation_before_any_operation():
