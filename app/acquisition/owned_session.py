@@ -285,7 +285,7 @@ class OwnedSessionContext:
                 html = await self.page.content()
                 if len(html.encode("utf-8")) > 10 * 1024 * 1024:
                     raise ValueError("session DOM exceeds limit")
-                return scraper._build_result(
+                return scraper.build_result(
                     html, final_url, True, engine_used="browser", status_code=None,
                 )
             finally:

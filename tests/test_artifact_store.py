@@ -5,8 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from botocore.exceptions import ClientError
+
 from app.artifacts import (
     ArtifactIntegrityError,
+    ArtifactStorageError,
     ArtifactTooLarge,
     FilesystemArtifactStore,
     S3ArtifactStore,
@@ -159,3 +162,72 @@ def test_s3_factory_does_not_silently_downgrade(monkeypatch):
 
     with pytest.raises(RuntimeError, match="S3_BUCKET"):
         artifact_store(worker_id="worker-a")
+
+
+def _client_error(code: str, status: int = 400) -> ClientError:
+    return ClientError(
+        {
+            "Error": {"Code": code, "Message": code},
+            "ResponseMetadata": {"HTTPStatusCode": status},
+        },
+        "HeadObject",
+    )
+
+
+async def test_s3_exists_returns_false_only_for_missing_objects(fake_s3):
+    store = S3ArtifactStore(fake_s3, "crawl", "worker-a")
+    ref = await store.put(chunks(b"hello"), "text/plain", 5)
+
+    class MissingThenAuth:
+        def __init__(self):
+            self.calls = 0
+
+        def head_object(self, **_kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise _client_error("404", 404)
+            raise _client_error("AccessDenied", 403)
+
+        def __getattr__(self, name):
+            return getattr(fake_s3, name)
+
+    store.client = MissingThenAuth()
+    assert await store.exists(ref) is False
+    with pytest.raises(ArtifactStorageError, match="exists"):
+        await store.exists(ref)
+
+
+async def test_s3_verify_raises_on_backend_failures(fake_s3):
+    store = S3ArtifactStore(fake_s3, "crawl", "worker-a")
+    ref = await store.put(chunks(b"hello"), "text/plain", 5)
+
+    class Throttled:
+        def head_object(self, **_kwargs):
+            raise _client_error("SlowDown", 503)
+
+        def __getattr__(self, name):
+            return getattr(fake_s3, name)
+
+    store.client = Throttled()
+    with pytest.raises(ArtifactStorageError, match="verify"):
+        await store.verify(ref)
+
+
+async def test_s3_put_cleanup_failure_does_not_mask_upload_error(fake_s3, caplog):
+    store = S3ArtifactStore(fake_s3, "crawl", "worker-a")
+
+    class FailingUpload:
+        def upload_fileobj(self, *args, **kwargs):
+            raise _client_error("InternalError", 500)
+
+        def delete_object(self, **_kwargs):
+            raise _client_error("ServiceUnavailable", 503)
+
+        def __getattr__(self, name):
+            return getattr(fake_s3, name)
+
+    store.client = FailingUpload()
+    with caplog.at_level("WARNING"):
+        with pytest.raises(ArtifactStorageError, match="put"):
+            await store.put(chunks(b"hello"), "text/plain", 5)
+    assert any("temporary S3 object" in record.message for record in caplog.records)

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import math
 import os
 import time
@@ -12,6 +13,8 @@ from app.url_safety import ensure_public_url
 from app.acquisition.registry import env_registry
 from app.acquisition.router import AcquisitionRouter
 from app.acquisition import sessions
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderBudgetInvalid(ValueError):
@@ -117,13 +120,21 @@ class CrawlService:
         await self.registry.aclose()
 
     async def _run_worker(self) -> None:
+        worker_id = getattr(self._worker, "worker_id", None)
         while True:
             self._wake.clear()
             try:
                 if await self._worker.run_once():
                     continue
             except Exception:
-                pass
+                # Keep the loop alive, but never discard diagnostics.
+                active = getattr(self._worker, "active_lease", None)
+                task_id = active[0] if isinstance(active, tuple) and active else None
+                logger.exception(
+                    "crawl worker loop failed worker_id=%s task_id=%s",
+                    worker_id,
+                    task_id,
+                )
             try:
                 async with asyncio.timeout(1):
                     await self._wake.wait()
@@ -139,7 +150,12 @@ class CrawlService:
                 self._maintenance_last_success = time.monotonic()
                 self._maintenance_last_error = None
             except Exception as exc:
-                self._maintenance_last_error = type(exc).__name__
+                message = str(exc).strip()
+                detail = type(exc).__name__
+                if message:
+                    detail = f"{detail}: {message[:300]}"
+                self._maintenance_last_error = detail
+                logger.exception("crawl maintenance loop failed detail=%s", detail)
             await asyncio.sleep(10)
 
 

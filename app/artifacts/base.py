@@ -12,6 +12,11 @@ class ArtifactIntegrityError(ValueError):
     pass
 
 
+class ArtifactStorageError(RuntimeError):
+    """Backend transport/auth/throttling failures distinct from missing objects."""
+
+
+
 @dataclass(frozen=True)
 class ArtifactRef:
     uri: str

@@ -583,10 +583,13 @@ class WebScraper:
             "_raw": {"html": ""},
         }
 
-    def _build_result(self, html_content: str, url: str, only_main_content: bool,
-                      engine_used: str, title: str = "", description: str = "",
-                      status_code: Optional[int] = None) -> Dict[str, Any]:
+    def build_result(self, html_content: str, url: str, only_main_content: bool,
+                     engine_used: str, title: str = "", description: str = "",
+                     status_code: Optional[int] = None) -> Dict[str, Any]:
         """Run the extraction pipeline on raw HTML and assemble the API result.
+
+        Public entry point for acquisition adapters and session runners so they
+        do not depend on private scraper methods.
 
         status_code (the HTTP status of the fetch) and the verbatim pre-clean
         html are threaded out additively for raw capture: status_code
@@ -652,6 +655,10 @@ class WebScraper:
             # saved JSON; persistence writes it to data/runs/<stem>/page-N.html.txt).
             "_raw": {"html": html_content},
         }
+
+    def _build_result(self, *args, **kwargs) -> Dict[str, Any]:
+        """Backward-compatible alias for :meth:`build_result`."""
+        return self.build_result(*args, **kwargs)
 
     def _error_result(self, url: str, error: str, reason: Optional[str] = None,
                       status_code: Optional[int] = None,
