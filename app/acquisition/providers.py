@@ -59,6 +59,10 @@ class ProviderRequest:
     only_main_content: bool
     session_profile: str | None = None
     max_decoded_bytes: int | None = None
+    # Options threaded from the crawl worker into adapters (local browser, proxy).
+    capture_screenshot: bool = False
+    before_browser: object | None = None
+    proxy: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,13 @@ class ProviderResult:
     status_code: int | None
     native_cost: NativeCost
     remote_session_id: str | None = None
+    # Carry-through for single-normalize: budgets/screenshots survive build_result.
+    downloaded_bytes: int = 0
+    screenshot: bytes | None = None
+    # Document path: already-normalized markdown (skip HTML build_result).
+    prebuilt_title: str | None = None
+    prebuilt_markdown: str | None = None
+    prebuilt_metadata: Mapping[str, object] | None = None
 
 
 @dataclass

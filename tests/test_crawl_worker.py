@@ -4,7 +4,8 @@ from uuid import uuid4
 
 from datetime import datetime, timedelta, timezone
 
-from app.crawl.types import ClaimedTask
+from app.acquisition.providers import ProviderFailure, NativeCost
+from app.crawl.types import ClaimedTask, TaskResult
 from app.crawl.worker import CrawlWorker
 
 
@@ -59,6 +60,22 @@ def _task():
     )
 
 
+class _FakeRouter:
+    """Production-shaped acquire: returns TaskResult, receives worker options."""
+
+    def __init__(self, outcome):
+        self.outcome = outcome
+        self.calls = []
+
+    async def acquire(self, task, *, capability=None, options=None):
+        self.calls.append({"task": task, "options": dict(options or {})})
+        if isinstance(self.outcome, BaseException):
+            raise self.outcome
+        if callable(self.outcome):
+            return await self.outcome(task, options or {})
+        return self.outcome
+
+
 async def test_worker_completes_one_task_with_ordered_discovery():
     class Repository:
         def __init__(self):
@@ -79,25 +96,51 @@ async def test_worker_completes_one_task_with_ordered_discovery():
             self.completed.append(result)
             return True
 
-    class Scraper:
-        async def scrape(self, url, **kwargs):
-            assert kwargs["capture_screenshot"] is True
-            assert kwargs["max_decoded_bytes"] == 1024
-            return {
-                "success": True, "url": url, "title": "Example",
-                "markdown": "ok", "discovery_html": "<a href='/next'>next</a>",
-                "metadata": {"status_code": 200},
-            }
+    async def acquire(task, options):
+        assert options["capture_screenshot"] is True
+        assert options["max_decoded_bytes"] == 1024
+        assert callable(options.get("before_browser"))
+        return TaskResult(
+            final_url=task.url, status_code=200, title="Example", markdown="ok",
+            metadata={"status_code": 200, "downloaded_bytes": 42},
+            discovery_html="<a href='/next'>next</a>",
+        )
 
     repository = Repository()
+    router = _FakeRouter(acquire)
     worker = CrawlWorker(
-        "worker-1", {"http"}, repository, Scraper(),
+        "worker-1", {"http"}, repository, SimpleNamespace(),
         discover=lambda html, url, config: [SimpleNamespace(url=url + "next")],
+        acquisition_router=router,
     )
 
     assert await worker.run_once() is True
     assert repository.completed[0].discovered_urls == ("https://example.comnext",)
+    assert repository.completed[0].metadata["downloaded_bytes"] == 42
     assert await worker.run_once() is False
+
+
+async def test_worker_requires_acquisition_router():
+    class Repository:
+        async def claim_task(self, worker_id, capabilities):
+            return _task()
+
+        async def heartbeat(self, task_id, lease_token):
+            return True
+
+        async def fail_task(self, task_id, lease_token, decision, metadata=None):
+            self.failed = (decision, metadata)
+            return True
+
+        async def retry_task(self, *a, **k):
+            raise AssertionError("missing router is a worker_exception")
+
+    repository = Repository()
+    worker = CrawlWorker("worker-1", {"http"}, repository, SimpleNamespace())
+    assert await worker.run_once() is True
+    decision, metadata = repository.failed
+    assert decision.error_code == "worker_exception"
+    assert metadata["exception_type"] == "RuntimeError"
 
 
 async def test_worker_discards_output_after_heartbeat_loss():
@@ -116,14 +159,16 @@ async def test_worker_discards_output_after_heartbeat_loss():
         async def complete_task(self, task_id, lease_token, result):
             raise AssertionError("lost leases must not complete")
 
-    class Scraper:
-        async def scrape(self, url, **kwargs):
-            await heartbeat_called.wait()
-            return {"success": True, "url": url, "metadata": {}}
+    async def slow_acquire(task, options):
+        await heartbeat_called.wait()
+        return TaskResult(
+            final_url=task.url, status_code=200, title="", markdown="x", metadata={},
+        )
 
     worker = CrawlWorker(
-        "worker-1", {"http"}, Repository(), Scraper(),
+        "worker-1", {"http"}, Repository(), SimpleNamespace(),
         heartbeat_seconds=0,
+        acquisition_router=_FakeRouter(slow_acquire),
     )
 
     assert await worker.run_once() is True
@@ -145,19 +190,22 @@ async def test_worker_cancels_scrape_at_task_deadline():
         async def heartbeat(self, task_id, lease_token):
             return False
 
-    class Scraper:
-        async def scrape(self, url, **kwargs):
+    class Router:
+        async def acquire(self, task, *, capability=None, options=None):
             try:
                 await asyncio.Event().wait()
             except asyncio.CancelledError:
                 cancelled.set()
                 raise
 
-    assert await CrawlWorker("worker-1", {"http"}, Repository(), Scraper()).run_once()
+    assert await CrawlWorker(
+        "worker-1", {"http"}, Repository(), SimpleNamespace(),
+        acquisition_router=Router(),
+    ).run_once()
     assert cancelled.is_set()
 
 
-async def test_worker_retries_transient_scrape_failure():
+async def test_worker_retries_transient_provider_failure():
     class Repository:
         def __init__(self):
             self.retried = []
@@ -172,15 +220,13 @@ async def test_worker_retries_transient_scrape_failure():
             self.retried.append(decision)
             return True
 
-    class Scraper:
-        async def scrape(self, url, **kwargs):
-            return {
-                "success": False,
-                "metadata": {"reason": "transport_error", "status_code": None},
-            }
-
     repository = Repository()
-    worker = CrawlWorker("worker-1", {"http"}, repository, Scraper())
+    worker = CrawlWorker(
+        "worker-1", {"http"}, repository, SimpleNamespace(),
+        acquisition_router=_FakeRouter(
+            ProviderFailure("transport_error", True, NativeCost({})),
+        ),
+    )
 
     assert await worker.run_once() is True
     assert repository.retried[0].error_code == "transport_error"
@@ -205,12 +251,11 @@ async def test_worker_persists_unexpected_exception_metadata():
         async def retry_task(self, *args, **kwargs):
             raise AssertionError("worker exceptions must not retry as transport")
 
-    class Scraper:
-        async def scrape(self, url, **kwargs):
-            raise AttributeError("missing adapter attribute")
-
     repository = Repository()
-    worker = CrawlWorker("worker-1", {"http"}, repository, Scraper())
+    worker = CrawlWorker(
+        "worker-1", {"http"}, repository, SimpleNamespace(),
+        acquisition_router=_FakeRouter(AttributeError("missing adapter attribute")),
+    )
 
     assert await worker.run_once() is True
     decision, metadata = repository.failed[0]
@@ -241,12 +286,15 @@ async def test_worker_blocks_disallowed_robots_before_scraping():
             self.blocked.append(code)
             return True
 
-    class Scraper:
-        async def scrape(self, url, **kwargs):
+    class Router:
+        async def acquire(self, task, *, capability=None, options=None):
             raise AssertionError("robots-denied URLs must not fetch")
 
     repository = Repository()
-    assert await CrawlWorker("worker-1", {"http"}, repository, Scraper()).run_once()
+    assert await CrawlWorker(
+        "worker-1", {"http"}, repository, SimpleNamespace(),
+        acquisition_router=Router(),
+    ).run_once()
     assert repository.blocked == ["seed_blocked_by_robots"]
 
 
@@ -264,15 +312,19 @@ async def test_worker_paces_page_after_live_robots_fetch():
         async def reserve_browser_navigation(self, task_id, lease_token): return True
         async def complete_task(self, task_id, lease_token, result): return True
 
-    class Scraper:
-        async def scrape(self, url, **kwargs):
-            return {"success": True, "url": url, "markdown": "ok", "metadata": {}}
+    async def acquire(task, options):
+        return TaskResult(
+            final_url=task.url, status_code=200, title="", markdown="ok", metadata={},
+        )
 
     async def robots(url):
         return {"status": 200, "html": "User-agent: *\nAllow: /\n", "headers": {}}
 
-    await CrawlWorker("worker-1", {"http"}, Repository(), Scraper(),
-                      robots_fetch=robots, robots_sleep=sleep).run_once()
+    await CrawlWorker(
+        "worker-1", {"http"}, Repository(), SimpleNamespace(),
+        robots_fetch=robots, robots_sleep=sleep,
+        acquisition_router=_FakeRouter(acquire),
+    ).run_once()
     assert delays == [1.0]
 
 
@@ -285,13 +337,16 @@ async def test_worker_discards_page_when_lease_is_lost_during_robots_wait():
         async def robots_cache(self, origin_key): return None
         async def store_robots(self, origin_key, body, status): pass
 
-    class Scraper:
-        async def scrape(self, url, **kwargs):
+    class Router:
+        async def acquire(self, task, *, capability=None, options=None):
             raise AssertionError("lease loss during robots pacing must skip the page")
 
     async def robots(url):
         return {"status": 200, "html": "User-agent: *\nAllow: /\n", "headers": {}}
 
-    await CrawlWorker("worker-1", {"http"}, Repository(), Scraper(),
-                      heartbeat_seconds=0, robots_fetch=robots,
-                      robots_sleep=lambda _: asyncio.sleep(0)).run_once()
+    await CrawlWorker(
+        "worker-1", {"http"}, Repository(), SimpleNamespace(),
+        heartbeat_seconds=0, robots_fetch=robots,
+        robots_sleep=lambda _: asyncio.sleep(0),
+        acquisition_router=Router(),
+    ).run_once()

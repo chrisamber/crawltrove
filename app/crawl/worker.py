@@ -88,7 +88,14 @@ class CrawlWorker:
                 await proxy_lease.start(attest)
                 self.active_proxy_lease = proxy_lease
             timeout = (task.deadline_at - datetime.now(timezone.utc)).total_seconds()
-            scrape_options = {
+            # Production always acquires through the router (TaskResult). Direct
+            # scraper.scrape is not a second path — tests inject a fake router.
+            if self.acquisition_router is None:
+                raise RuntimeError(
+                    "CrawlWorker requires an acquisition_router; "
+                    "direct scraper.scrape is not a durable acquire path"
+                )
+            acquire_options: dict[str, Any] = {
                 "only_main_content": config.onlyMainContent,
                 "engine": config.engine,
                 "capture_screenshot": config.screenshots,
@@ -97,19 +104,11 @@ class CrawlWorker:
             }
             if proxy_lease is not None:
                 # Proxy workers never fall back to ambient or direct proxy settings.
-                scrape_options["proxy"] = proxy_lease.playwright_proxy()
-                scrape_options["trust_env"] = False
-            if self.acquisition_router is None:
-                scrape_task = asyncio.create_task(self.scraper.scrape(task.url, **scrape_options))
-            else:
-                async def acquire():
-                    result = await self.acquisition_router.acquire(task)
-                    return {
-                        "success": True, "url": result.final_url, "title": result.title,
-                        "markdown": result.markdown, "metadata": dict(result.metadata),
-                        "discovery_html": result.discovery_html,
-                    }
-                scrape_task = asyncio.create_task(acquire())
+                acquire_options["proxy"] = proxy_lease.playwright_proxy()
+                acquire_options["trust_env"] = False
+            scrape_task = asyncio.create_task(
+                self.acquisition_router.acquire(task, options=acquire_options)
+            )
             lease_wait = asyncio.create_task(lease_lost.wait())
             done, _ = await asyncio.wait(
                 {scrape_task, lease_wait}, timeout=timeout,
@@ -124,12 +123,12 @@ class CrawlWorker:
             lease_wait.cancel()
             await asyncio.gather(lease_wait, return_exceptions=True)
             try:
-                scraped = await scrape_task
+                acquired: TaskResult = await scrape_task
             except HumanInputRequired as exc:
                 if (exc.backend != "owned" or "browser" not in self.capabilities
                         or self.session_handler is None):
                     raise
-                if not await self.session_handler.start(task, scrape_options):
+                if not await self.session_handler.start(task, acquire_options):
                     raise
                 return True
             except ProviderFailure as exc:
@@ -151,28 +150,23 @@ class CrawlWorker:
                 return True
             if lease_lost.is_set():
                 return True
-            if not scraped.get("success"):
-                await self._record_failure(task, scraped, proxy_lease)
-                return True
 
-            metadata = dict(scraped.get("metadata") or {})
+            metadata = dict(acquired.metadata or {})
             if proxy_lease is not None:
                 metadata["proxy_id"] = proxy_lease.node_id
-            # Keep page description for downstream formatters (e.g. llms.txt).
-            if scraped.get("description") and not metadata.get("description"):
-                metadata["description"] = scraped["description"]
-            raw = scraped.get("_raw") or {}
-            if raw.get("screenshot"):
-                metadata["screenshot_bytes"] = len(raw["screenshot"])
-            page_url = scraped.get("url") or task.url
-            links = self.discover(scraped.get("discovery_html", ""), page_url, config)
+            page_url = acquired.final_url or task.url
+            status_code = acquired.status_code
+            if status_code is None:
+                status_code = metadata.get("status_code")
+            links = self.discover(acquired.discovery_html or "", page_url, config)
             result = TaskResult(
                 final_url=page_url,
-                status_code=metadata.get("status_code"),
-                title=scraped.get("title", ""),
-                markdown=scraped.get("markdown", ""),
+                status_code=status_code if isinstance(status_code, int) else None,
+                title=acquired.title or "",
+                markdown=acquired.markdown or "",
                 metadata=metadata,
                 discovered_urls=tuple(link.url for link in links),
+                discovery_html=acquired.discovery_html or "",
             )
             if not lease_lost.is_set():
                 await self.repository.complete_task(task.id, task.lease_token, result)

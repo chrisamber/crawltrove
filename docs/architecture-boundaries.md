@@ -39,6 +39,10 @@ Prefer package-public helpers over private `_` attributes:
 | Maintenance / readiness snapshot | `crawl_service.maintenance_status()`, `leases_ready()` |
 | Migration version list | `migrate.migration_versions()` |
 | PDF page bitmap for OCR/vision | `ocr.render_page(page, dpi)` |
+| Durable page acquire | `AcquisitionRouter.acquire(task, options=…)` → `TaskResult` (only path) |
+| Local raw capture | `LocalAdapter.acquire` → `ProviderResult` (HTML/bytes only; router normalizes once) |
+
+`CrawlWorker` requires an acquisition router. There is no direct `scraper.scrape` branch on the durable path.
 
 ## 4. Observability hooks added for residual soft paths
 

@@ -278,12 +278,17 @@ async def test_artifact_completion_failure_is_retried_by_crawl_worker():
             self.retries.append(decision)
             return True
 
-    class Scraper:
-        async def scrape(self, url, **kwargs):
-            return {"success": True, "url": url, "markdown": "hello", "metadata": {}}
+    class Router:
+        async def acquire(self, task, *, capability=None, options=None):
+            return TaskResult(
+                final_url=task.url, status_code=200, title="", markdown="hello",
+                metadata={},
+            )
 
     repository = Repository()
     adapter = _ArtifactRepository(repository, RecordingArtifacts())
-    worker = CrawlWorker("edge-1", {"http"}, adapter, Scraper())
+    worker = CrawlWorker(
+        "edge-1", {"http"}, adapter, object(), acquisition_router=Router(),
+    )
     assert await worker.run_once() is True
     assert repository.retries[0].retry is True
