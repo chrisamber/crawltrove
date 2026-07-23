@@ -158,6 +158,9 @@ class CrawlWorker:
             metadata = dict(scraped.get("metadata") or {})
             if proxy_lease is not None:
                 metadata["proxy_id"] = proxy_lease.node_id
+            # Keep page description for downstream formatters (e.g. llms.txt).
+            if scraped.get("description") and not metadata.get("description"):
+                metadata["description"] = scraped["description"]
             raw = scraped.get("_raw") or {}
             if raw.get("screenshot"):
                 metadata["screenshot_bytes"] = len(raw["screenshot"])

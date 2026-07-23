@@ -148,6 +148,36 @@ def save_llmstxt(url: str, llms_txt: str, llms_full_txt: str) -> Dict[str, str]:
     return paths
 
 
+def save_llmstxt_job_status(job_id: str, payload: Dict[str, Any]) -> None:
+    """Atomic sidecar for durable-crawl llmstxt generation status."""
+    safe_id = _safe_path_component(job_id, label="llmstxt job_id")
+    if safe_id is None:
+        raise ValueError("llmstxt job_id must be a single safe path segment")
+    ensure_dirs()
+    path = _contained_path(LLMSTXT_DIR, f"{safe_id}.status.json")
+    tmp = _contained_path(LLMSTXT_DIR, f"{safe_id}.status.json.{uuid.uuid4().hex[:8]}.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+def load_llmstxt_job_status(job_id: str) -> Optional[Dict[str, Any]]:
+    """Load llmstxt generation status for a durable crawl job, if present."""
+    safe_id = _safe_path_component(job_id, label="llmstxt job_id")
+    if safe_id is None:
+        return None
+    path = _contained_path(LLMSTXT_DIR, f"{safe_id}.status.json")
+    if not path.is_file():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning("failed to load llmstxt status for %s: %s", job_id, e)
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _save_checkpoint(folder: str, job_id: str, payload: Dict[str, Any]) -> None:
     """Atomic checkpoint write (json tmp + os.replace).
 
